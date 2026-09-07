@@ -1,0 +1,206 @@
+From dab792f4d0bb1664f96e62c1613a60f753d3aff9 Mon Sep 17 00:00:00 2001
+From: Nicolas Fernandez <feni@broadinstitute.org>
+Date: Sun, 6 Sep 2026 14:10:09 -0400
+Subject: [PATCH] feat(io): allow a custom parquet writer for points elements
+
+Adds an optional points_writer hook to SpatialData.write() and write_points(),
+letting a caller control the points.parquet layout (row-group boundaries,
+compression, number of files) while SpatialData still writes all element
+metadata. Default behaviour is unchanged when the hook is omitted.
+
+This follows the existing pass-through option pattern on write()
+(shapes_geometry_encoding, raster_compressor,
+convert_table_strings_to_categoricals) rather than introducing a new concept,
+and it is deliberately layout-generic: nothing about it is specific to any
+tiling scheme or viewer.
+
+Motivation: producing spatially tiled row groups otherwise requires writing the
+points parquet once with the default writer and then rewriting it. On an 8M
+transcript Xenium dataset that measured 13.5s vs 8.5s, and it writes ~250MB of
+transient output that is immediately discarded -- a gap that widens on
+300M-transcript panels.
+
+Note the hook receives the dataframe after transformations are stripped from
+attrs (as the default writer requires), so a writer needing the coordinate
+transform must obtain it from the element beforehand.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ src/spatialdata/_core/spatialdata.py | 10 +++++++
+ src/spatialdata/_io/io_points.py     | 21 ++++++++++++-
+ tests/io/test_readwrite.py           | 45 ++++++++++++++++++++++++++++
+ 3 files changed, 75 insertions(+), 1 deletion(-)
+
+diff --git a/src/spatialdata/_core/spatialdata.py b/src/spatialdata/_core/spatialdata.py
+index 6ee2296..a98a76f 100644
+--- a/src/spatialdata/_core/spatialdata.py
++++ b/src/spatialdata/_core/spatialdata.py
+@@ -56,6 +56,7 @@ if TYPE_CHECKING:
+         SpatialDataContainerFormatType,
+         SpatialDataFormatType,
+     )
++    from spatialdata._io.io_points import PointsWriter
+ 
+ 
+ class SpatialData:
+@@ -1115,6 +1116,7 @@ class SpatialData:
+         shapes_geometry_encoding: Literal["WKB", "geoarrow"] | None = None,
+         raster_compressor: dict[Literal["lz4", "zstd"], int] | None = None,
+         convert_table_strings_to_categoricals: bool = False,
++        points_writer: PointsWriter | None = None,
+     ) -> None:
+         """
+         Write the `SpatialData` object to a Zarr store.
+@@ -1170,6 +1172,11 @@ class SpatialData:
+         convert_table_strings_to_categoricals
+             If True, convert string columns of all tables to categoricals before writing.
+             Note that this will have a side effect of modifying string columns into categoricals in place.
++        points_writer
++            Optional callable ``(points, path) -> None`` used to write each points element's
++            ``points.parquet`` in place of the default dask writer, allowing a caller to control
++            the parquet layout (row-group boundaries, compression, number of files). Element
++            metadata is still written by SpatialData. See :func:`spatialdata._io.write_points`.
+         """
+         from spatialdata._io._utils import _resolve_zarr_store, _validate_compressor_args
+         from spatialdata._io.format import _parse_formats
+@@ -1199,6 +1206,7 @@ class SpatialData:
+                 shapes_geometry_encoding=shapes_geometry_encoding,
+                 raster_compressor=raster_compressor,
+                 convert_table_strings_to_categoricals=convert_table_strings_to_categoricals,
++                points_writer=points_writer,
+             )
+ 
+         if self.path != file_path and update_sdata_path:
+@@ -1218,6 +1226,7 @@ class SpatialData:
+         shapes_geometry_encoding: Literal["WKB", "geoarrow"] | None = None,
+         raster_compressor: dict[Literal["lz4", "zstd"], int] | None = None,
+         convert_table_strings_to_categoricals: bool = False,
++        points_writer: PointsWriter | None = None,
+     ) -> None:
+         from spatialdata._io.io_zarr import _get_groups_for_element
+ 
+@@ -1271,6 +1280,7 @@ class SpatialData:
+                 points=element,
+                 group=element_group,
+                 element_format=parsed_formats["points"],
++                points_writer=points_writer,
+             )
+         elif element_type == "shapes":
+             write_shapes(
+diff --git a/src/spatialdata/_io/io_points.py b/src/spatialdata/_io/io_points.py
+index bb203ca..485f938 100644
+--- a/src/spatialdata/_io/io_points.py
++++ b/src/spatialdata/_io/io_points.py
+@@ -1,7 +1,9 @@
+ from __future__ import annotations
+ 
+ import warnings
++from collections.abc import Callable
+ from pathlib import Path
++from typing import Any, TypeAlias
+ 
+ import zarr
+ from dask.dataframe import DataFrame as DaskDataFrame
+@@ -22,6 +24,11 @@ from spatialdata.transformations._utils import (
+ )
+ 
+ 
++#: Callable writing a points element's ``points.parquet``, given the dataframe (with
++#: transformations already stripped) and the destination path.
++PointsWriter: TypeAlias = Callable[[DaskDataFrame, Any], None]
++
++
+ def _read_points(
+     store: str | Path,
+ ) -> DaskDataFrame:
+@@ -53,6 +60,7 @@ def write_points(
+     group: zarr.Group,
+     group_type: str = "ngff:points",
+     element_format: Format = CurrentPointsFormat(),
++    points_writer: PointsWriter | None = None,
+ ) -> None:
+     """Write a points element to a zarr store.
+ 
+@@ -66,6 +74,14 @@ def write_points(
+         The type of the element.
+     element_format
+         The format of the points element used to store it.
++    points_writer
++        Optional callable ``(points, path) -> None`` used to write ``points.parquet``
++        instead of :meth:`dask.dataframe.DataFrame.to_parquet`. It receives the dataframe
++        with the transformations already stripped from ``attrs``, and the destination path
++        (a directory, matching dask's multi-file output). The element's zarr metadata is
++        written by this function either way, so a custom writer only controls the parquet
++        layout -- for example to choose row-group boundaries, compression, or the number
++        of files. It must preserve the rows and the index; reordering them is allowed.
+     """
+     if element_format.zarr_format == 2:
+         warnings.warn(
+@@ -91,7 +107,10 @@ def write_points(
+ 
+     points_without_transform = points.copy()
+     del points_without_transform.attrs["transform"]
+-    points_without_transform.to_parquet(path)
++    if points_writer is not None:
++        points_writer(points_without_transform, path)
++    else:
++        points_without_transform.to_parquet(path)
+ 
+     attrs = element_format.attrs_to_dict(points.attrs)
+     attrs["version"] = element_format.spatialdata_format_version
+diff --git a/tests/io/test_readwrite.py b/tests/io/test_readwrite.py
+index c018d88..37597fe 100644
+--- a/tests/io/test_readwrite.py
++++ b/tests/io/test_readwrite.py
+@@ -1368,3 +1368,48 @@ def test_sdata_with_nan_in_obs(tmp_path: Path, convert_strings_to_categoricals:
+             assert pd.isna(r1.iloc[1])
+         else:
+             assert r1.iloc[1] == "nan"
++
++
++def test_write_points_writer_hook(tmp_path: Path, points: SpatialData) -> None:
++    """A custom points_writer replaces the parquet layout but not the element metadata."""
++    import pyarrow as pa
++    import pyarrow.parquet as pq
++
++    calls: list[tuple[str, int]] = []
++
++    def custom_writer(df, path):
++        # Two row groups of our choosing, which the default dask writer would not produce.
++        table = pa.Table.from_pandas(df.compute(), preserve_index=True)
++        calls.append((str(path.name), table.num_rows))
++        path.mkdir(parents=True, exist_ok=True)
++        with pq.ParquetWriter(path / "chunk_0.parquet", table.schema) as w:
++            half = table.num_rows // 2
++            w.write_table(table.slice(0, half))
++            w.write_table(table.slice(half, table.num_rows - half))
++
++    f = tmp_path / "hooked.zarr"
++    points.write(f, points_writer=custom_writer)
++
++    assert calls, "points_writer was never invoked"
++    assert all(name == "points.parquet" for name, _ in calls)
++
++    reread = read_zarr(f)
++    for name, original in points.points.items():
++        got = reread.points[name]
++        assert len(got) == len(original)
++        assert set(got.columns) == set(original.columns)
++        # metadata (transformations) still written by SpatialData, not the custom writer
++        assert "transform" in got.attrs
++        written = pq.ParquetFile(f / "points" / name / "points.parquet" / "chunk_0.parquet")
++        assert written.metadata.num_row_groups == 2
++
++
++def test_write_without_points_writer_is_unchanged(tmp_path: Path, points: SpatialData) -> None:
++    """Omitting the hook must keep the default dask output byte-for-byte equivalent."""
++    a, b = tmp_path / "a.zarr", tmp_path / "b.zarr"
++    points.write(a)
++    points.write(b, points_writer=None)
++    for name in points.points:
++        assert sorted(p.name for p in (a / "points" / name / "points.parquet").iterdir()) == sorted(
++            p.name for p in (b / "points" / name / "points.parquet").iterdir()
++        )
+-- 
+2.50.1 (Apple Git-155)
+

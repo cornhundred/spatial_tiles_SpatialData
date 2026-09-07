@@ -1,0 +1,26 @@
+# The three forks are cloned here and version-controlled independently, each on its own
+# branch. They are ignored rather than added as submodules: the branches move quickly
+# during development, and pinning a submodule SHA on every commit would be noise. See
+# README.md for the branch each should be on.
+/spatialdata/
+/spatialdata-io/
+/celldega/
+
+# Raw and derived datasets. Tens of GB, and all reproducible -- see README.md for the
+# download commands and the one call that rebuilds each store.
+/data/
+
+# Python environment
+/integration/.venv/
+
+# Notebook state. Outputs are cleared before committing so diffs stay readable.
+.ipynb_checkpoints/
+**/__pycache__/
+*.pyc
+
+.DS_Store
+
+# Saved notebook outputs. With CELLDEGA_LOCAL_ESM set, anywidget inlines the ~10 MB
+# front-end bundle into *each* widget's state on save, so a four-widget notebook lands at
+# ~41 MB. Strip outputs before committing:
+#   integration/.venv/bin/jupyter nbconvert --clear-output --inplace integration/*.ipynb
