@@ -1,0 +1,11 @@
+{
+  "name": "spatial-tiles-probes",
+  "private": true,
+  "type": "module",
+  "description": "Measurement scripts backing design_notes/adapt_dega_plan.md",
+  "dependencies": {
+    "@vivjs/loaders": "^0.22.1",
+    "numcodecs": "^0.3.2",
+    "zarrita": "^0.7.5"
+  }
+}

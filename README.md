@@ -64,12 +64,21 @@ add_spatial_tiling(
 ```
 .
 ├── design_notes/          notes for reviewers (tracked here)
-├── integration/           environment + the test notebook (tracked here)
+├── integration/           environment, test notebook, probes (tracked here)
 ├── spatialdata/           fork, ignored -- should be on `main`, unmodified
 ├── spatialdata-io/        fork, ignored -- branch feat/xenium-celldega-regular-grid
 ├── celldega/              fork, ignored -- branch feat/spatialdata-regular-grid-reader
 └── data/                  ignored -- raw bundles and built stores, tens of GB
 ```
+
+### Two directions
+
+The branches above make **SpatialData produce what Celldega reads**. A second pair of
+branches, both named `adapt_dega`, inverts that — **Celldega reads what SpatialData already
+writes** (`obs`/`var`/`X` via zarrita), leaving only the transcript and boundary Parquets as
+derived files. See
+[`design_notes/adapt_dega_plan.md`](design_notes/adapt_dega_plan.md); the feasibility
+measurements behind it are reproducible via [`integration/probes/`](integration/probes/).
 
 **SpatialData core needs no change.** A `points_writer` hook was prototyped and dropped
 because nothing used it; the patch is kept in `design_notes/` if it is ever wanted.

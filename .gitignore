@@ -13,6 +13,10 @@
 # Python environment
 /integration/.venv/
 
+# Probe dependencies -- reinstall with `npm install` in integration/probes/
+/integration/probes/node_modules/
+/integration/probes/package-lock.json
+
 # Notebook state. Outputs are cleared before committing so diffs stay readable.
 .ipynb_checkpoints/
 **/__pycache__/
@@ -20,7 +24,8 @@
 
 .DS_Store
 
-# Saved notebook outputs. With CELLDEGA_LOCAL_ESM set, anywidget inlines the ~10 MB
-# front-end bundle into *each* widget's state on save, so a four-widget notebook lands at
-# ~41 MB. Strip outputs before committing:
-#   integration/.venv/bin/jupyter nbconvert --clear-output --inplace integration/*.ipynb
+# Saved notebook state. With CELLDEGA_LOCAL_ESM set, anywidget inlines the front-end
+# bundle into each widget's state on save. Most of that lands in `metadata.widgets`, NOT in
+# cell outputs -- a four-widget notebook reached 226 MB, and `nbconvert --clear-output`
+# removed none of it. Strip both before committing:
+#   integration/.venv/bin/python integration/strip_notebook.py integration/*.ipynb
