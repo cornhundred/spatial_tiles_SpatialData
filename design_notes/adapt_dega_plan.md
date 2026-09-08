@@ -17,25 +17,32 @@ from either.
 
 ## Running tally
 
-`✅` proven by a probe · `🔨` to build · `➖` stays custom on purpose · `⏸` deferred
+`🟢` built + validated against a real store, not yet wired into the viewer ·
+`🔨` still to build · `➖` stays custom on purpose · `⏸` deferred
 
 | # | component | today | native source | status |
 |---|---|---|---|---|
-| 1 | gene names | `meta_gene.parquet` | `tables/table/var/_index` | ✅ reads |
-| 2 | gene stats (mean, max) | `meta_gene.parquet` | compute from `X`, or `var` columns | 🔨 reader |
-| 3 | **gene colours** | `meta_gene.parquet` | **new** `var["color"]` | 🔨 writer + reader |
-| 4 | cell names | `cell_metadata.parquet` | `tables/table/obs/_index` | ✅ reads |
-| 5 | cell centroids | `cell_metadata.parquet` | `tables/table/obsm/spatial` | ✅ reads |
-| 6 | other cell metadata | — | `obs/*`, incl. categoricals | ✅ reads |
-| 7 | cluster assignments | `cell_clusters/` | `obs` categorical column | ✅ reads |
-| 8 | **cluster palettes** | `cell_clusters/` | `uns["<col>_colors"]` (scanpy convention) | 🔨 writer + reader |
-| 9 | cell × gene | `cbg/chunk_N.parquet` | `tables/table/X` (CSR) | ✅ reads · 🔨 reader |
-| 10 | µm→px transform | `micron_to_image_transform.csv` | NGFF `coordinateTransformations` | 🔨 reader |
+| 1 | gene names | `meta_gene.parquet` | `tables/table/var/_index` | 🟢 |
+| 2 | gene stats (mean, std, max) | `meta_gene.parquet` | computed from `X` | 🟢 |
+| 3 | **gene colours** | `meta_gene.parquet` | **new** `var["color"]` | 🟢 reader (fallback palette) · 🔨 writer |
+| 4 | cell names | `cell_metadata.parquet` | `tables/table/obs/_index` | 🟢 |
+| 5 | cell centroids | `cell_metadata.parquet` | `tables/table/obsm/spatial` | 🟢 |
+| 6 | other cell metadata | — | `obs/*`, incl. categoricals | 🟢 |
+| 7 | cluster assignments | `cell_clusters/` | `obs` categorical column | 🟢 |
+| 8 | **cluster palettes** | `cell_clusters/` | `uns["<col>_colors"]` (scanpy convention) | 🟢 reader · 🔨 writer |
+| 9 | cell × gene | `cbg/chunk_N.parquet` | `tables/table/X` (CSR) | 🟢 |
+| 10 | µm→px transform | `micron_to_image_transform.csv` | NGFF `coordinateTransformations` | 🟢 |
+| — | **wire 1–10 into the viewer** | — | — | 🔨 next |
 | 11 | images, 8-bit | `images/<ch>/` WebP | — | ➖ **keep as-is** |
 | 12 | images, 16-bit | — | OME-Zarr + viv | ⏸ deferred |
 | 13 | transcripts | `trx/chunk_NN.parquet` | — | ➖ **keep as-is** |
 | 14 | cell boundaries | `cell_seg/chunk_NN.parquet` | — | ➖ **keep as-is** |
-| 15 | manifest | `landscape_parameters.json` | slimmed to 11/13/14 + pointers | 🔨 |
+| 15 | manifest | `landscape_parameters.json` | kept, gains a `spatialdata` block | ➖ **keep** |
+
+Rows 1–10 are implemented in celldega `js/spatialdata/` and validated against the real
+pancreas store: the derived gene statistics match the Python-written `meta_gene.parquet`
+exactly, and a warm gene column costs ~5 ms. What remains is wiring them into
+`landscape_ist.js` behind the manifest's `spatialdata` block.
 
 Rows 1–10 delete files from `grid_files_v1`. Rows 11–14 are the deliberate middle ground:
 **8-bit WebP images and the custom display Parquets stay.** After rows 1–10 land, the
@@ -140,6 +147,33 @@ cross-cutting.
 Beyond colours, `celldega.pre` computes gene stats today. `obs`/`var` give names and values
 but no derived statistics, so that logic moves into the Celldega reader. Small, but it is
 the `df_sig.parquet` gap resurfacing in a new place.
+
+---
+
+## What this removes from the spatialdata-io PR
+
+Only once Celldega ships the reader — until then the PR has to keep working against
+released Celldega, so this is a follow-up, not an edit to the open PR.
+
+| removed | lines |
+|---|---|
+| `cbg_parquet.py` (whole module) | 181 |
+| `write_cell_metadata` in `shapes_parquet.py` | 57 |
+| `to_frame` + `_expression_stats` in `feature_catalog.py` | 92 |
+| `_write_cell_clusters`, `_write_micron_to_image_transform` + call sites | ~50 |
+| `test_cbg_parquet.py` + the corresponding assertions elsewhere | ~300 |
+| **added back**: `var["color"]` and `uns["<col>_colors"]` writers | +50 |
+| **net** | **≈ −630 of 4,264 (~15%)** |
+
+Fifteen percent, not fifty: the bulk of the PR is the display Parquets and the tile
+machinery (`points_parquet.py` 559, `shapes_parquet.py` 269, `regular_grid.py` 247), all of
+which stay, plus the WebP path (322 + 213 tests) which is deliberately kept.
+
+The bigger effect is on what the PR *is*. Today it reads as "SpatialData learns Celldega's
+file formats", which invites the obvious objection. After this it reads as "SpatialData
+gains a spatial index over points and shapes, plus an image pyramid", with the viewer
+reading canonical AnnData for everything else. That is a much easier conversation, and it
+is worth more than the line count.
 
 ---
 
