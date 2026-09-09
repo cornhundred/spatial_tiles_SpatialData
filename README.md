@@ -27,17 +27,19 @@ Two phases. The first is stock SpatialData. The second reads that store back and
 sample.zarr/
 ├── points/transcripts/points.parquet/      canonical columns, reordered into tile row groups
 ├── shapes/cell_boundaries/shapes.parquet/  canonical GeoParquet, same reordering
-└── visualization/grid_files_v1/            all derived, all regenerable
+├── tables/table/
+│   ├── var["color"|"mean"|"std"|...]       gene colours and statistics
+│   └── layers/X_csc                        gene-major expression, chunked per gene
+└── visualization/grid_files_v1/            derived, regenerable
     ├── landscape_parameters.json           the manifest
     ├── trx/                                display_xy + feature_code
-    ├── cell_seg/                           display_geometry + cell_code
-    ├── cbg/                                gene-major expression, one gene per row group
-    ├── images/<channel>/                   WebP pyramid per channel
-    ├── cell_metadata.parquet               cell centroids + names
-    ├── meta_gene.parquet                   per-gene stats + colours
-    ├── micron_to_image_transform.csv       micron→pixel affine
-    └── cell_clusters/                      placeholder clustering
+    └── cell_seg/                           display_geometry + cell_code
 ```
+
+Everything else a viewer needs — cell names and centroids, gene names, clusters, the
+micron→pixel transform, the images — is read from the store's own `obs`, `var`, `obsm`,
+`uns` and OME-Zarr. An 8-bit WebP pyramid, if wanted, is built by `celldega.pre` rather
+than written here.
 
 Delete `visualization/` and you have an ordinary SpatialData store back. The row ordering
 is the only change to canonical data, and row order is meaningless for a point cloud.
@@ -66,8 +68,8 @@ add_spatial_tiling(
 ├── design_notes/          notes for reviewers (tracked here)
 ├── integration/           environment, test notebook, probes (tracked here)
 ├── spatialdata/           fork, ignored -- should be on `main`, unmodified
-├── spatialdata-io/        fork, ignored -- branch feat/xenium-celldega-regular-grid
-├── celldega/              fork, ignored -- branch feat/spatialdata-regular-grid-reader
+├── spatialdata-io/        fork, ignored -- branch adapt_dega
+├── celldega/              fork, ignored -- branch adapt_dega
 └── data/                  ignored -- raw bundles and built stores, tens of GB
 ```
 
@@ -103,8 +105,8 @@ for r in spatialdata spatialdata-io; do
   git -C $r fetch upstream --tags
 done
 
-git -C spatialdata-io switch feat/xenium-celldega-regular-grid
-git -C celldega     switch feat/spatialdata-regular-grid-reader
+git -C spatialdata-io switch adapt_dega
+git -C celldega     switch adapt_dega
 
 bash integration/setup_env.sh          # uv venv + editable installs + npm ci + build
 git config core.hooksPath .githooks     # strips notebook widget state before commits
@@ -147,7 +149,6 @@ from spatialdata_io.experimental import xenium_spatially_tiled
 xenium_spatially_tiled(
     "data/xenium_data/Xenium_V1_human_Pancreas_FFPE_outs",
     "data/pancreas_full.zarr",
-    tiling={"image_element": "morphology_focus"},
     nucleus_boundaries=False, cells_labels=False, nucleus_labels=False,
     morphology_mip=False, morphology_focus=True, aligned_images=False,
 )
@@ -179,15 +180,18 @@ The DegaFiles views are the controls — reading across a row isolates the stora
 reading down a column isolates dataset scale.
 
 ```bash
-cd spatialdata-io && ../integration/.venv/bin/python -m pytest tests/ -q   # 193 passed
-cd celldega && ../integration/.venv/bin/python -m pytest tests/ -q         # 389 passed
-cd celldega && npx jest                                                    # 131 passed
+cd spatialdata-io && ../integration/.venv/bin/python -m pytest tests/ -q   # 161 passed
+cd celldega && ../integration/.venv/bin/python -m pytest tests/ -q         # 407 passed
+cd celldega && npx jest                                                    # 162 passed
 ```
 
 ---
 
 ## Notes
 
+- [`design_notes/proposal_summary.md`](design_notes/proposal_summary.md) — what is actually
+  being proposed: the store conventions, the new code, and the one new convention that needs
+  explicit sign-off.
 - [`design_notes/review_guide.md`](design_notes/review_guide.md) — reading order for the
   diff, the measurement behind each non-obvious decision, storage figures, limitations.
 - [`design_notes/interop_findings.md`](design_notes/interop_findings.md) — eight things
