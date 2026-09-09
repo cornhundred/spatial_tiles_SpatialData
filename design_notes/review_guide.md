@@ -1,53 +1,52 @@
 # Review guide
 
-Two branches. **spatialdata-io is the substance**; the celldega one is small and can be
-reviewed in a few minutes. **SpatialData core needs no change at all.**
+Two branches, both named `adapt_dega`. **spatialdata-io is the substance**; the celldega
+branch is reader code and can be reviewed independently. **SpatialData core needs no change.**
 
 | repo | branch | diff | status |
 |---|---|---|---|
-| spatialdata-io | `feat/xenium-celldega-regular-grid` | +4,264 | the profile |
-| celldega | `feat/spatialdata-regular-grid-reader` | +528 / −19 | reader + 3 unrelated bug fixes |
+| spatialdata-io | `adapt_dega` | +3,615 / −1 | the proposal |
+| celldega | `adapt_dega` | +3,310 / −55 | the reader (excluding the generated bundle) |
 | spatialdata | — | — | **no change needed** |
+
+Read [`proposal_summary.md`](proposal_summary.md) first if you only read one thing: it
+separates *store conventions* (which any tool can consume) from *new code*.
+
+> An earlier pair of branches — `feat/xenium-celldega-regular-grid` and
+> `feat/spatialdata-regular-grid-reader` — are superseded. They wrote the viewer's whole
+> bundle into the store. These branches keep only what Zarr genuinely cannot serve.
 
 ---
 
-## What the profile actually does
+## What the proposal actually is
 
-An opt-in set of derived files that make a SpatialData store directly viewable, plus one
-change to the canonical elements: **rows are reordered into a deterministic tile grid**,
-one Parquet row group per tile. Nothing else about the canonical data changes.
+Row-group the canonical Points and Shapes into a deterministic tile grid, add a gene-major
+copy of the expression matrix, and write two small display Parquets. Everything else a
+viewer needs is read from the store's own `obs`, `var`, `obsm`, `uns` and OME-Zarr.
 
 ```
 sample.zarr/
-├── points/transcripts/points.parquet/      canonical columns, reordered into tile row groups
-├── shapes/cell_boundaries/shapes.parquet/  canonical GeoParquet, same reordering
-└── visualization/grid_files_v1/            all new, all derived
-    ├── landscape_parameters.json           the manifest
-    ├── trx/chunk_NN.parquet                display_xy + feature_code, same row groups
-    ├── cell_seg/chunk_NN.parquet           display_geometry + cell_code
-    ├── cbg/chunk_N.parquet                 gene-major expression, one gene per row group
-    ├── images/<channel>/chunk_N.parquet    WebP pyramid per channel
-    ├── cell_metadata.parquet               cell centroids + names
-    ├── meta_gene.parquet                   per-gene stats + colours
-    ├── micron_to_image_transform.csv       micron→pixel affine (drives the scale bar)
-    └── cell_clusters/                      placeholder clustering
+├── points/transcripts/points.parquet/      reordered into tile row groups
+├── shapes/cell_boundaries/shapes.parquet/  same reordering
+├── tables/table/
+│   ├── var[mean|std|max|non_zero]          per-gene statistics
+│   ├── uns[gene_colors]                    AnnData's <name>_colors convention
+│   └── layers/X_csc                        gene-major, chunked per gene
+└── visualization/grid_files_v1/
+    ├── landscape_parameters.json
+    ├── trx/                                display_xy + feature_code
+    └── cell_seg/                           display_geometry + cell_code
 ```
 
-The row grouping is the one thing that touches canonical data, and it is what makes
-spatial subsetting cheap from Python — a 20-tile read is **8 ms on 8 M transcripts,
-10 ms on 74 M**, versus a full scan.
+Only the row reordering touches canonical data, and row order is meaningless for a point
+cloud. Delete `visualization/` and the store is an ordinary SpatialData store.
 
 ---
 
-## spatialdata-io: `feat/xenium-celldega-regular-grid`
+## Reading order
 
-15 commits, +4,264 lines. **~1,400 lines are executable code**; the rest is docstrings
-(24%), tests (1,445 lines) and comments.
-
-### Review in this order
-
-**1. `regular_grid.py` (247)** — start here. Pure, dependency-light tile math. Everything
-else builds on it.
+**1. `regular_grid.py` (247)** — start here. Pure, dependency-light tile math that
+everything else builds on.
 
 ```python
 tile_x  = floor((x_px - origin_x) / tile_size_px)     # half-open bounds
@@ -59,18 +58,16 @@ Reimplements Celldega's formula rather than importing it — Celldega already de
 spatialdata-io, so importing back would be circular. A conformance test pins the two
 together instead.
 
-**2. `feature_catalog.py` (195)** — genes first in `var_names` order, controls appended
-above them. That ordering is load-bearing three ways:
+**2. `feature_catalog.py` (185)** — genes first in `var` order, controls appended after.
+That ordering is load-bearing: `feature_code` *is* the position in this catalog. Because
+`var` holds only the genes, the manifest records the control names — see the interop note
+below.
 
-```
-feature_code == row position in meta_gene.parquet == CBG row group
-```
-
-**3. `points_parquet.py` (504)** — the main writer. Two paths that must agree:
+**3. `points_parquet.py` (559)** — the main writer. Two paths that must agree:
 
 ```python
 write_points_regular_grid(points, out, catalog=cat, grid=grid)                    # canonical
-write_points_regular_grid(points, out, catalog=cat, grid=grid, render_only=True)  # render file
+write_points_regular_grid(points, out, catalog=cat, grid=grid, render_only=True)  # display
 ```
 
 In-memory below ~20 M rows; above that a two-pass spill. Grouping by tile is a *global*
@@ -78,17 +75,22 @@ sort, so streaming the read is not enough — pass 1 spills rows into per-output
 buckets, pass 2 sorts each independently. A test asserts both paths produce identical row
 groups.
 
-**4. `shapes_parquet.py` (322)**, **`cbg_parquet.py` (181)**, **`webp_parquet.py` (310)** —
-independent, reviewable in any order.
+**4. `expression_index.py` (197)** — the newest piece, and the one that makes CBG scale.
+`var` statistics plus a gene-major `X_csc` layer, chunked by the *average gene* rather than
+for whole-matrix reads.
 
-**5. `manifest.py` (192)** and **`tiled_access.py` (395)** — the two entry points:
+**5. `shapes_parquet.py` (266)**, **`display_colors.py` (85)** — independent.
+
+**6. `manifest.py` (206)** and **`tiled_access.py` (316)** — the entry points:
 
 ```python
-add_spatial_tiling("sample.zarr", tile_size_px=250, image_element="morphology_focus")
-xenium_spatially_tiled(raw, "out.zarr", tiling={"image_element": "morphology_focus"})
+add_spatial_tiling("sample.zarr")
+xenium_spatially_tiled(raw, "out.zarr")
 ```
 
-### Decisions worth checking, with the measurement behind each
+---
+
+## Decisions worth checking, with the measurement behind each
 
 | decision | why |
 |---|---|
@@ -96,81 +98,74 @@ xenium_spatially_tiled(raw, "out.zarr", tiling={"image_element": "morphology_foc
 | **multi-file** output | a single 7,535-row-group file has a **7.4 MB footer** the browser must fetch before its first read; split, each is ~410 KB |
 | **zstd** | snappy +38.5% vs zstd +4.9% over an untiled store, same write time |
 | statistics **off** | the tile formula is the index; statistics only inflate the footer |
-| zero-padded chunk names | Celldega indexes the manifest array; dask globs and sorts lexicographically, where `chunk_10` precedes `chunk_2` |
-| render columns in **separate files** | a nested Arrow column cannot survive dask's parquet round-trip, so `SpatialData.write()` broke |
-| **float32** coordinates | see below |
+| zero-padded chunk names | dask globs and sorts lexicographically, where `chunk_10` precedes `chunk_2` |
+| display columns in **separate files** | a nested Arrow column cannot survive dask's parquet round-trip, so `SpatialData.write()` broke |
+| **float32** coordinates | uint32 rounding produced a visible lattice at high zoom |
+| CSC as a **layer**, not the primary | `adata[cells]` is the dominant analysis access pattern and it is row access; flipping the primary would tax every scanpy user |
+| CSC chunk = **2 genes** of non-zeros | AnnData chunks for whole-matrix reads (162,948 non-zeros against ~6,915 for one gene), costing 24× per gene |
+| colours in **`uns`** | AnnData's existing `<name>_colors` convention; a `var["color"]` column would have been a new one |
 
-### Storage
+### What was deliberately *not* put in spatialdata-io
 
-Honest figure, against an equivalently-compressed untiled store (not against
-SpatialData's snappy default, which flatters it):
-
-```
-zstd, untiled, no render columns    173.9 MB    baseline
-+ tiling into 7,535 row groups      243.0 MB    +39.8%
-```
-
-Fragmentation, not the columns, is the cost — zstd compresses one large block far better
-than 7,535 small ones. With 5,006 genes, the categorical dictionary alone is ~20% of the
-points file, since it is rewritten per column chunk.
-
-### Known limitations
-
-- Cluster colouring is a **single placeholder group**; SpatialData does not require a
-  clustering and the Xenium reader does not load one.
-- Cell hover labels need `cats.nameMapping_inv`, which the profile does not populate.
-- The Xenium `transcripts.zarr` fast path is not implemented (deferred, not cut).
+- **the WebP pyramid** — moved to `celldega.pre.spatialdata_images`. An 8-bit lossy pyramid
+  is a viewer artefact: 25 MB against 2.9 GB for the canonical uint16 image it derives from.
+- **CBG Parquet, `meta_gene.parquet`, `cell_metadata.parquet`, `cell_clusters/`,
+  `micron_to_image_transform.csv`** — all read from the store itself now.
 
 ---
 
-## celldega: `feat/spatialdata-regular-grid-reader`
+## Cost
 
-**Three of these are bugs that exist independently of this work** and are worth landing
-regardless:
+Measured on the rebuilt stores, Xenium pancreas (8.1 M transcripts, 377 genes) and Prime
+skin (74 M, 5,006).
 
-| commit | what |
-|---|---|
-| `747b032` | **local server ignored `Range`** — advertised it in CORS headers but inherited `SimpleHTTPRequestHandler.do_GET`. A `bytes=0-7` request for a 3.86 MB chunk returned all 3,861,910 bytes. Every local row-group read was a full-file download, DegaFiles included, so **any local benchmark of that path measured the wrong thing** |
-| `2797d1f` | **trailing slash in `base_url`** produced `//`, an empty path segment that absorbs one `..` |
-| `ef92b2b` | **CDN vs local bundle** — a clean `X.Y.Z` install silently serves the published bundle, so local `js/` edits do nothing with no warning. This cost an entire debugging session |
+| | pancreas | skin |
+|---|---|---|
+| table, before → after | 7.9 MB → 17 MB | 58 MB → 162 MB |
+| profile dir, before → after | 140 MB → 100 MB | 600 MB → 415 MB |
+| **whole store** | **3.3 GB → 3.3 GB** | **5.1 GB → 5.1 GB** |
 
-Profile support proper:
+The store does not grow: the profile shrinks by more than the table grows. The gene-major
+layer costs **1.9×** the CSR matrix (104 MB against 55 MB for skin) because chunking for
+single-gene reads compresses worse — `genes_per_chunk` is the knob if that matters.
 
-| commit | what |
-|---|---|
-| `89c0ef3` | manifest-driven column names, DegaFiles defaults preserved |
-| `30d0fca` | **removes** the column projection — see below |
-| `d1484c1` | accept `List` as well as `FixedSizeList` vertex coordinates |
-| `f7901cd` | **revert before merging** — temporary `spatialdata<0.8` relaxation |
+Tiling the canonical points costs **+39.8%** over an equivalently-compressed untiled store.
+Fragmentation, not the extra columns: zstd compresses one large block far better than 7,535
+small ones.
 
-### parquet-wasm's column projection is broken
+In the browser:
 
-Passing `columns` to `ParquetFile.read` corrupts the IPC stream it emits; the failure
-surfaces later in `tableFromIPC`. Reproduced on **0.7.1 and 0.7.2**, apache-arrow **15 and
-18**, scalar and nested columns alike, and **even with an empty array**. Only reads that
-pass no `columns` succeed.
+| | pancreas | skin |
+|---|---|---|
+| gene list | 0.017 MB | 0.126 MB |
+| one gene | 0.084 MB | 0.060 MB |
+| *whole matrix, the old way* | *4.5 MB* | *54.8 MB* |
 
-Projection turned out to be unnecessary anyway: the render files hold only render columns,
-so reading all of one *is* the projection.
-
-### Backwards compatibility
-
-Every change is additive. DegaFiles declare none of the new manifest keys and keep their
-existing behaviour (`geometry` / `name`, all columns). Tests assert both paths.
+A 12.8× larger matrix does not cost 12.8× more per gene — cost tracks non-zeros per gene,
+which is roughly constant across datasets.
 
 ---
 
-## spatialdata core: no change
+## celldega: `adapt_dega`
 
-The profile needs nothing from core. `add_spatial_tiling` works entirely on an
-already-written store, and the whole spatialdata-io suite passes against unmodified
-`spatialdata` main.
+`js/spatialdata/` reads the store with zarrita and builds Arrow tables with the schemas
+Celldega already consumed, so `set_meta_gene`, `set_color_dict_gene`,
+`set_cell_names_array` and `get_scatter_data` are untouched — only the source of the bytes
+changes. The adapter also duck-types `CBGRowGroupReader.readGene`, so the whole expression
+path needed no changes at all.
 
-A generic `points_writer` hook was prototyped and then dropped, because nothing used it:
-it would have saved a double write (13.5s → 8.5s on 8 M transcripts) only on the one-shot
-path, which does not pass it. Kept as
-[`spatialdata-points-writer-hook.patch`](spatialdata-points-writer-hook.patch) in case
-that path is optimised later.
+Opt-in per component through the manifest's `spatialdata` block. A manifest without one
+takes none of these paths, which is what keeps DegaFiles working; tests assert both
+directions.
+
+`celldega.pre.spatialdata_images` builds the 8-bit WebP pyramid from a store, using Pillow
+rather than pyvips so no libvips install is needed. Its DeepZoom numbering is verified
+against `vips dzsave`.
+
+Also on this branch, worth landing regardless: an esbuild-time build stamp that prints the
+branch and commit to the console. anywidget silently serves the published CDN bundle for a
+clean `X.Y.Z` install, so local `js/` edits can do nothing with no warning — a failure mode
+that already cost one debugging session.
 
 ---
 
@@ -178,15 +173,21 @@ that path is optimised later.
 
 | suite | result |
 |---|---|
-| spatialdata-io | 192 passed, 36 skipped |
-| celldega Python | 389 passed |
-| celldega JS | 131 passed, 18 suites |
-| spatialdata core | 1,359 passed (unchanged by the hook) |
+| spatialdata-io | 168 passed, 36 skipped |
+| celldega Python | 407 passed |
+| celldega JS | 160 passed |
 
-Also exercised end to end on two real datasets — Xenium pancreas (8.1 M transcripts,
-377 genes) and Xenium Prime human skin (74 M transcripts, 5,006 genes) — rendering in
-Celldega with images, cells, centroids, transcripts and CBG gene colouring.
+Exercised end to end on both datasets, rebuilt from raw data in 46 s (pancreas) and 151 s
+(skin), rendering in Celldega with images, cells, centroids, transcripts and gene colouring.
 
-Interop findings that contradict the original design assumptions are written up separately
-in [`interop_findings.md`](interop_findings.md); several are worth reading before
-reviewing the spec.
+Interop findings that contradict the original design assumptions are in
+[`interop_findings.md`](interop_findings.md); several are worth reading before the spec.
+
+### Known limitations
+
+- Cluster colouring is a single placeholder group unless an `obs` column is named:
+  SpatialData does not require a clustering and the Xenium reader does not load one.
+- Cell hover labels need `cats.nameMapping_inv`, which the reader does not populate.
+- The Xenium `transcripts.zarr` fast path is not implemented — deferred, not cut.
+- There is **no automated end-to-end test that a written store renders**. The notebook is
+  manual, and that gap is what let most of the interop findings through.

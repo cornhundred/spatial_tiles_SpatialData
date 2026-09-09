@@ -1,5 +1,11 @@
 # `adapt_dega`: Celldega reads SpatialData natively
 
+> **Mostly delivered.** This is the working document — the plan, the measurements behind
+> each decision, and the tally as it stood while the work was in progress. For the
+> finished state read [`proposal_summary.md`](proposal_summary.md) and
+> [`review_guide.md`](review_guide.md); the figures there are measured against the rebuilt
+> stores and supersede any estimate here.
+
 The first branches made **SpatialData produce what Celldega reads**. These branches invert
 it: **Celldega reads what SpatialData already writes**, and the derived profile shrinks to
 only what Zarr genuinely cannot serve — or what we deliberately choose to keep custom.

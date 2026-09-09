@@ -43,18 +43,18 @@ everything from the elements themselves.
 
 ## 2. New code in spatialdata-io
 
-3,434 lines on `adapt_dega`, of which 1,981 is source and 1,471 tests.
+3,615 lines on `adapt_dega`, of which 2,087 is source and the rest tests.
 
 | module | lines | what |
 |---|---|---|
 | `points_parquet.py` | 559 | display points + tile row grouping, with a spill-to-disk path above ~20 M rows |
-| `tiled_access.py` | 303 | the two entry points: `add_spatial_tiling`, `xenium_spatially_tiled` |
+| `tiled_access.py` | 316 | the two entry points: `add_spatial_tiling`, `xenium_spatially_tiled` |
 | `shapes_parquet.py` | 266 | display geometry + the same row grouping |
 | `regular_grid.py` | 247 | the tile math everything else builds on |
 | `manifest.py` | 206 | assemble and validate the manifest |
 | `expression_index.py` | 197 | `var` statistics + the gene-major layer, chunked per gene |
 | `feature_catalog.py` | 185 | stable feature ordering — genes in `var` order, controls after |
-| `display_colors.py` | 80 | the palette for (5) and (6) |
+| `display_colors.py` | 85 | the palette for (5) and (6) |
 
 **Not in spatialdata-io, deliberately:**
 
