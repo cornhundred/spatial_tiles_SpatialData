@@ -39,14 +39,17 @@ from either.
 | 14 | cell boundaries | `cell_seg/chunk_NN.parquet` | — | ➖ **keep as-is** |
 | 15 | manifest | `landscape_parameters.json` | kept, gains a `spatialdata` block | ➖ **keep** |
 
-Rows 1–10 are implemented in celldega `js/spatialdata/` and validated against the real
-pancreas store: the derived gene statistics match the Python-written `meta_gene.parquet`
-exactly, and a warm gene column costs ~5 ms. What remains is wiring them into
-`landscape_ist.js` behind the manifest's `spatialdata` block.
+Rows 1–10 and 12 are implemented in celldega `js/spatialdata/` and validated against the
+real pancreas store: the derived gene statistics match the Python-written
+`meta_gene.parquet` exactly, a warm gene column costs ~5 ms, and viv reads the OME-Zarr
+pyramid including channel names. What remains is wiring them into `landscape_ist.js`
+behind the manifest's `spatialdata` block.
 
-Rows 1–10 delete files from `grid_files_v1`. Rows 11–14 are the deliberate middle ground:
-**8-bit WebP images and the custom display Parquets stay.** After rows 1–10 land, the
-profile is just `trx/`, `cell_seg/`, `images/` and a much smaller manifest.
+Rows 1–10 delete files from `grid_files_v1`; row 12 makes row 11 optional rather than
+required. Rows 13–14 are the deliberate middle ground — **the display Parquets stay**,
+because a spatial index over millions of unaligned points is the one thing Zarr has no
+good answer for. Once this lands the profile is `trx/`, `cell_seg/`, a manifest, and a
+WebP pyramid only for those who want 8-bit speed.
 
 ### What spatialdata-io has to *add* (not just delete)
 
