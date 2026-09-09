@@ -16,7 +16,7 @@ round-trips, and each is independently useful.
 | 2 | **display Parquets** | `visualization/grid_files_v1/{trx,cell_seg}/` | render-ready encoding: float32 interleaved coordinates and integer feature codes, same row grouping |
 | 3 | **gene-major `X`** | `tables/table/layers/X_csc` | reading one gene from CSR touches every chunk. Also what any per-gene analysis wants |
 | 4 | **per-gene statistics** | `var["mean"|"std"|"max"|"non_zero"]` | a gene list without reading the matrix. Ordinary `var` columns |
-| 5 | **gene colours** | `var["color"]` | ⚠️ **a new convention** — see below |
+| 5 | **gene colours** | `uns["gene_colors"]` | AnnData's existing `<name>_colors` convention, in `var_names` order |
 | 6 | **cluster palettes** | `uns["<column>_colors"]` | the existing scanpy convention, followed exactly |
 | 7 | **a manifest** | `visualization/grid_files_v1/landscape_parameters.json` | records the grid, the display files, and the feature ordering |
 
@@ -24,12 +24,12 @@ Only the **row grouping (1)** touches canonical data, and only by reordering row
 meaningless for a point cloud. Everything else is additive. Delete `visualization/` and the
 store is unchanged.
 
-### The one thing to flag in review
+### No new conventions
 
-**`var["color"]` is a new convention.** AnnData has `uns["<column>_colors"]` for *obs*
-categoricals but nothing for genes. It should be proposed as a convention rather than
-slipped in. The alternative — a colour file in the profile directory — is worse, because it
-would be invisible to every tool except the viewer that wrote it.
+An earlier draft put gene colours in a `var["color"]` column, which would have been a new
+convention. They now go to `uns["gene_colors"]`, matching the `<name>_colors` lists AnnData
+already uses — the same shape scanpy writes for obs categoricals, just ordered by
+`var_names` instead of by category. Nothing here asks a reader to learn a new idea.
 
 ### Why the tile grid lives in two places
 
@@ -54,7 +54,7 @@ everything from the elements themselves.
 | `manifest.py` | 206 | assemble and validate the manifest |
 | `expression_index.py` | 197 | `var` statistics + the gene-major layer, chunked per gene |
 | `feature_catalog.py` | 185 | stable feature ordering — genes in `var` order, controls after |
-| `display_colors.py` | 78 | the palette for (5) and (6) |
+| `display_colors.py` | 80 | the palette for (5) and (6) |
 
 **Not in spatialdata-io, deliberately:**
 
