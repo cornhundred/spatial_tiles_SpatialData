@@ -107,6 +107,7 @@ git -C spatialdata-io switch feat/xenium-celldega-regular-grid
 git -C celldega     switch feat/spatialdata-regular-grid-reader
 
 bash integration/setup_env.sh          # uv venv + editable installs + npm ci + build
+git config core.hooksPath .githooks     # strips notebook widget state before commits
 ```
 
 Register the kernel. The environment variables matter: celldega chooses its front-end

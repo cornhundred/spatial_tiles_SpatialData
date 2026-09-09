@@ -1,0 +1,22 @@
+#!/bin/sh
+# Strip notebook widget state before it can be committed.
+#
+# With CELLDEGA_LOCAL_ESM set, anywidget inlines the front-end bundle into each widget's
+# state, which ipywidgets persists under the notebook's top-level `metadata.widgets`.
+# A four-widget notebook reaches ~70 MB there, and `nbconvert --clear-output` does not
+# touch it. This has already been committed twice by accident.
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep '\.ipynb$')
+[ -z "$staged" ] && exit 0
+
+python=integration/.venv/bin/python
+[ -x "$python" ] || python=python3
+
+for nb in $staged; do
+    before=$(wc -c < "$nb")
+    "$python" integration/strip_notebook.py "$nb" >/dev/null || exit 1
+    after=$(wc -c < "$nb")
+    if [ "$before" != "$after" ]; then
+        echo "pre-commit: stripped $nb ($before -> $after bytes); re-staging"
+        git add "$nb"
+    fi
+done
