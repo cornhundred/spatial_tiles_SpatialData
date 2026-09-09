@@ -22,7 +22,15 @@ Canonical transcript coordinates and polygon geometries remain authoritative. Di
 polygons keep only the largest part's exterior ring. Canonical Points keep their original
 columns; canonical Shapes currently also gain a positional `cell_code` column. For raw
 Xenium conversion, statistics and palettes are present in the initial table write and the
-CSC buffers are tuned afterward. Adding tiling to an existing store still rewrites its table.
+CSC buffers are tuned afterward, so the table is written once. Adding tiling to an existing
+store still deletes and rewrites its table.
+
+The canonical **Points** are still written twice on the one-shot path: once by
+`sdata.write()` and again by the tiling pass that reorders them into row groups. Removing
+that would mean writing tile row groups during the initial write, which spatialdata-io
+cannot do from outside — it needs a writer hook in SpatialData core (the dropped
+[points_writer patch](spatialdata-points-writer-hook.patch)). It costs write time, not
+correctness.
 
 Deleting `visualization/` removes display files and their manifest. It does **not** undo
 canonical row grouping, `cell_code`, table statistics, palettes or CSC storage. Conversely,

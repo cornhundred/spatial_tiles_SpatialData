@@ -71,6 +71,7 @@ categories, including unused categories.
 
 - spatialdata-io six tiling suites: 118 passed, 1 skipped.
 - Celldega complete JavaScript suite: 169 passed in 20 suites.
+- spatialdata-io complete suite: 171 passed, 36 skipped.
 - The dense-tile regression confirms one footer row group for 1,048,577 rows.
 - The cell-link regression deliberately makes `obs_names` disagree with `instance_key`.
 - The palette regression includes nonalphabetical and unused categories.

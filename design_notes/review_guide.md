@@ -50,6 +50,19 @@ its profile or row-group contract. Alternate names alone do not establish compat
 with all valid SpatialData stores. Tile-aware Python reads can be cheap, but no core
 SpatialData spatial-query acceleration has been added.
 
+Two deferred defects are worth knowing before reading the code, both confirmed by
+reproduction and both currently latent for Xenium:
+
+- **Gene statistics can be wrong on integer matrices.** `csc.multiply(csc)` squares before
+  the cast to float64, so an `int16` column `[300, 0]` reports `std=0` instead of `150`.
+  Explicitly stored zeros are also counted as non-zero, because the count comes from
+  `np.diff(csc.indptr)`. Xenium's `X` is float32 without stored zeros, so neither bites
+  today. The fix is `matrix.astype(np.float64).tocsc(copy=True)` plus `eliminate_zeros()`.
+- **Grid derivation transforms only the maximum x and y.** That is correct for the
+  axis-aligned scale/translation Xenium uses and wrong for rotation, shear or a non-zero
+  minimum. The profile should either validate that the transform is axis-aligned or
+  transform all bounding-box corners.
+
 Historical benchmark numbers are retained in [proposal_summary.md](proposal_summary.md)
 with their baseline identified. They compare the earlier full profile with `adapt_dega`,
 not an untiled stock store with a zero-cost extension. Old mixed compression/encoding
@@ -60,13 +73,17 @@ comparisons should not be used to promise general overhead or latency.
 | check | 2026-09-09 result |
 |---|---|
 | spatialdata-io six tiling suites | 118 passed, 1 skipped |
+| spatialdata-io complete suite | 171 passed, 36 skipped |
 | Celldega complete JS suite | 169 passed in 20 suites |
-| Celldega Python suite, integration interpreter | 406 passed, 1 skipped |
+| Celldega Python suite, integration interpreter | 407 passed |
+| raw-Xenium one-shot on real data | pancreas built in 49 s; store reopens with the CSC layer, `uns["gene_colors"]`, `var` statistics and a v3 table |
 | review diagnostics | confirmed cell-link, dense-row-group and palette fixes; retained save, affine, gene-palette lifecycle and statistics reproductions |
 
 Commands and reproduction details are in [the review](implementation_review.md) and
-[integration/probes/README.md](../integration/probes/README.md). The raw-Xenium test is
-environment-gated and still describes the superseded full profile; it was not run.
+[integration/probes/README.md](../integration/probes/README.md). The environment-gated
+raw-Xenium *test* still describes the superseded full profile and was not run; the one-shot
+path was instead exercised directly against the real pancreas dataset, which is what the
+row above records.
 
 The existing notebook records manual comparisons on pancreas and skin. This review did
 not rebuild the large reference datasets or rerun browser rendering. The unit suites do

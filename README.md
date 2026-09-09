@@ -197,7 +197,8 @@ reading down a column isolates dataset scale.
 ---
 
 The 2026-09-09 review ran the six spatialdata-io tiling suites (118 passed, 1 skipped),
-all Celldega JS tests (169 passed), and Celldega Python tests (406 passed, 1 skipped).
+all Celldega JS tests (169 passed), and Celldega Python tests (407 passed). The
+complete spatialdata-io suite is 171 passed, 36 skipped.
 Use the integration interpreter explicitly: plain `npm test` also invokes `pytest`
 from PATH, which can select a different Python installation.
 
