@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 """Add (or remove) the `spatialdata` block in a store's landscape_parameters.json.
 
-Celldega reads the derived Parquets unless the manifest opts in, so this is the switch that
-makes an existing store read natively -- no rebuild needed, which means the same store can
-be flipped back and forth to compare the two paths directly.
+Historical migration helper for the earlier full-profile Xenium stores. Current
+spatialdata-io already writes this block; no migration is needed for fresh profiles.
+The script assumes default Xenium element/table names and replaces native settings.
 
-Eventually spatialdata-io writes this block itself; until then this script stands in.
+Only a legacy store that still has all metadata/expression/image Parquets can be switched
+back with --off or partial native flags. Fresh adapt_dega profiles omit those files, so
+removing the block does not turn them into DegaFiles.
 
     python integration/enable_spatialdata_native.py data/pancreas_full.zarr
     python integration/enable_spatialdata_native.py data/pancreas_full.zarr --native metadata

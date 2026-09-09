@@ -15,37 +15,39 @@ notebook. The code lives in three forks cloned alongside (and git-ignored here).
 raw Xenium ──spatialdata_io.xenium()──> normal SpatialData ──add_spatial_tiling()──> same store + profile
 ```
 
-Two phases. The first is stock SpatialData. The second reads that store back and:
+For an existing store, the opt-in tiling pass reads the store and:
 
-- **reorders** rows in the canonical Points and Shapes into a deterministic tile grid, one
-  Parquet row group per tile — which also makes spatial subsetting cheap from Python
-  (a 20-tile read is ~8 ms on 8 M transcripts, ~10 ms on 74 M);
-- **writes derived files** under `visualization/grid_files_v1/` holding everything a viewer
-  needs and nothing a scientist does.
+- **reorders** canonical Points and Shapes into a deterministic tile grid, intended to
+  have one Parquet row group per tile, for selective reads by a tile-aware client;
+- **writes display Parquets** under `visualization/grid_files_v1/`, and adds gene
+  statistics, palettes and a CSC expression layer to the table.
 
 ```
 sample.zarr/
 ├── points/transcripts/points.parquet/      canonical columns, reordered into tile row groups
-├── shapes/cell_boundaries/shapes.parquet/  canonical GeoParquet, same reordering
+├── shapes/cell_boundaries/shapes.parquet   file or directory; geometry + cell_code
 ├── tables/table/
-│   ├── var["color"|"mean"|"std"|...]       gene colours and statistics
-│   └── layers/X_csc                        gene-major expression, chunked per gene
+│   ├── var[mean|std|max|non_zero]          gene statistics
+│   ├── uns["gene_colors"]                 gene colors, in var_names order
+│   └── layers/X_csc                        gene-major expression, small fixed chunks
 └── visualization/grid_files_v1/            derived, regenerable
     ├── landscape_parameters.json           the manifest
     ├── trx/                                display_xy + feature_code
-    └── cell_seg/                           display_geometry + cell_code
+    └── cell_seg                            file or directory: display_geometry + cell_code
 ```
 
-Everything else a viewer needs — cell names and centroids, gene names, clusters, the
-micron→pixel transform, the images — is read from the store's own `obs`, `var`, `obsm`,
-`uns` and OME-Zarr. An 8-bit WebP pyramid, if wanted, is built by `celldega.pre` rather
-than written here.
+Cell names and centroids, gene names, clusters, expression and images are read from the
+store's own `obs`, `var`, `obsm`, `uns` and OME-Zarr. Centroids use the selected Shapes
+transform; general registration and physical scale inference still need work. Native
+OME-Zarr images are the new profile's default and are converted to 8-bit for rendering.
+An optional WebP pyramid can be built by `celldega.pre.spatialdata_images`.
 
-Delete `visualization/` and you have an ordinary SpatialData store back. The row ordering
-is the only change to canonical data, and row order is meaningless for a point cloud.
+The tiled store is readable by ordinary SpatialData. Deleting `visualization/` removes the
+display assets, but leaves row grouping, `cell_code` and the table additions. An ordinary
+SpatialData save to a new store retains analysis content but loses the profile and tile
+layout; regenerate the profile after saving or changing source data.
 
-Nothing in the profile is instrument-specific except default argument values, so it
-converts an existing store from any reader:
+The entry point accepts alternate element/feature names, for example:
 
 ```python
 from spatialdata_io.experimental import add_spatial_tiling
@@ -61,6 +63,12 @@ add_spatial_tiling(
 
 ---
 
+Current support targets Xenium's single table instance namespace, compatible
+`obsm["spatial"]`, and a target coordinate system already in image-pixel space. Cell codes
+are resolved through the table's SpatialData `region_key` and `instance_key`. This is
+experimental, not support for every valid SpatialData store. See the
+[implementation review](design_notes/implementation_review.md) for confirmed gaps.
+
 ## Layout
 
 ```
@@ -75,15 +83,16 @@ add_spatial_tiling(
 
 ### Two directions
 
-The branches above make **SpatialData produce what Celldega reads**. A second pair of
-branches, both named `adapt_dega`, inverts that — **Celldega reads what SpatialData already
-writes** (`obs`/`var`/`X` via zarrita), leaving only the transcript and boundary Parquets as
-derived files. See
+The earlier `feat/xenium-celldega-regular-grid` and `feat/spatialdata-regular-grid-reader`
+branches made **SpatialData produce what Celldega reads**. The current `adapt_dega`
+branches instead make **Celldega read what SpatialData already writes** (`obs`/`var`/`X`
+via zarrita), leaving transcript and boundary Parquets as the derived spatial files. See
 [`design_notes/adapt_dega_plan.md`](design_notes/adapt_dega_plan.md); the feasibility
 measurements behind it are reproducible via [`integration/probes/`](integration/probes/).
 
-**SpatialData core needs no change.** A `points_writer` hook was prototyped and dropped
-because nothing used it; the patch is kept in `design_notes/` if it is ever wanted.
+**SpatialData core is unmodified.** Experimental stores read without a core patch;
+preserving the tile contract on save remains unresolved. A `points_writer` hook was
+prototyped and dropped because nothing used it; the patch is kept in `design_notes/` if it is ever wanted.
 
 ---
 
@@ -180,33 +189,45 @@ The DegaFiles views are the controls — reading across a row isolates the stora
 reading down a column isolates dataset scale.
 
 ```bash
-cd spatialdata-io && ../integration/.venv/bin/python -m pytest tests/ -q   # 161 passed
-cd celldega && ../integration/.venv/bin/python -m pytest tests/ -q         # 407 passed
-cd celldega && npx jest                                                    # 162 passed
+(cd spatialdata-io && ../integration/.venv/bin/python -m pytest tests/ -q)
+(cd celldega && ../integration/.venv/bin/python -m pytest tests/ -q --no-cov)
+(cd celldega && npx jest --runInBand)
 ```
 
 ---
 
+The 2026-09-09 review ran the six spatialdata-io tiling suites (118 passed, 1 skipped),
+all Celldega JS tests (169 passed), and Celldega Python tests (406 passed, 1 skipped).
+Use the integration interpreter explicitly: plain `npm test` also invokes `pytest`
+from PATH, which can select a different Python installation.
+
 ## Notes
 
 - [`design_notes/proposal_summary.md`](design_notes/proposal_summary.md) — what is actually
-  being proposed: the store conventions, the new code, and the one new convention that needs
-  explicit sign-off.
+  being proposed: store conventions, implementation responsibilities and upstream scope.
+- [`design_notes/implementation_review.md`](design_notes/implementation_review.md) —
+  confirmed issues, reproductions, test results and recommendations.
 - [`design_notes/review_guide.md`](design_notes/review_guide.md) — reading order for the
   diff, the measurement behind each non-obvious decision, storage figures, limitations.
 - [`design_notes/interop_findings.md`](design_notes/interop_findings.md) — eight things
   that only surfaced by rendering in a real viewer. Every one failed *silently*. Worth
   reading before the spec.
 - [`design_notes/regular_grid_tiled_access.md`](design_notes/regular_grid_tiled_access.md) —
-  the protocol, written viewer-independently. Two claims in it are corrected by the
-  interop findings.
+  the current protocol, including explicitly documented implementation gaps.
 - [`design_notes/spatialdata-points-writer-hook.patch`](design_notes/spatialdata-points-writer-hook.patch) —
   the dropped core change.
 
 ### Known limitations
 
-- Cluster colouring is a single placeholder group; SpatialData does not require a
-  clustering and the Xenium reader does not load one.
+- Cluster coloring defaults to one group unless `cluster_column` is provided. Configured
+  palettes follow the categorical column's stored order, including unused categories.
+- Cell codes use table row positions resolved through SpatialData region/instance keys.
+- Each tile is written and footer-validated as one physical Parquet row group. A single
+  tile above 67,108,864 rows is rejected rather than producing an ambiguous layout.
+- Gene colors stay in `uns["gene_colors"]`; gene filtering/reordering needs explicit
+  palette synchronization. Ordinary saves also require profile regeneration.
+- Asset replacement is not transactional. The one-shot Xenium path writes table additions
+  initially; the existing-store entry point still rewrites the table when indexing expression.
 - Cell hover labels need `cats.nameMapping_inv`, which the profile does not populate.
 - The Xenium `transcripts.zarr` fast path is not implemented — deferred, not cut.
 - There is **no automated end-to-end test that a written store renders**. The notebook is

@@ -1,426 +1,278 @@
-# Regular-grid tiled access profile (`celldega_regular_grid_v1`)
+# Regular-grid tiled access profile (`grid_files_v1`)
 
-**Status:** experimental · **Profile version:** 0.1.0
+**Status:** experimental · **Profile version:** 0.1.0 · **Reviewed:** 2026-09-09
 
-A viewer-independent protocol for fetching spatially-local subsets of a SpatialData store
-over HTTP range requests, without downloading whole files and without consulting Parquet
-statistics.
+This describes the current `adapt_dega` layout and its intended access contract. It
+replaces the earlier `celldega_regular_grid_v1` draft. Celldega is the reference client;
+the grid and encodings are reusable, while parts of the manifest remain Celldega-specific.
+This is not an accepted SpatialData standard. Known conformance gaps are called out below
+and reproduced in [the implementation review](implementation_review.md).
 
-Celldega is the first reference client. Nothing in this document is Celldega-specific;
-another viewer (Vitessce, SpatialData.js, napari) could implement it from this text alone.
+## 1. Scope and representation
 
----
+A profile gives a client a formula for selecting spatial tiles, then Parquet footer
+metadata gives it the byte ranges to fetch. Footers and the manifest are still needed;
+the viewport alone does not identify byte offsets.
 
-## 1. Motivation and scope
+```text
+sample.zarr/
+├── points/<points>/points.parquet/       canonical columns + original index, tile ordered
+├── shapes/<shapes>/shapes.parquet        file or directory; canonical geometry + cell_code
+├── tables/<table>/
+│   ├── var/{mean,std,max,non_zero}
+│   ├── uns/gene_colors
+│   ├── uns/<cluster_column>_colors       when requested and categorical
+│   └── layers/X_csc                      gene-major copy of sparse X
+└── visualization/grid_files_v1/
+    ├── landscape_parameters.json
+    ├── trx/                             display_xy + feature_code
+    └── cell_seg                          file or directory: display_geometry + cell_code
+```
 
-A viewer showing a 34,000 × 14,000 pixel tissue with 8 million transcripts must fetch only
-what is on screen. Two things have to be true:
+Original points and polygons are authoritative. The display Parquets contain derived
+coordinates and compact positional codes. In the current writer, only canonical Shapes
+also acquire `cell_code`; canonical Points do not acquire display columns. Statistics,
+palettes and the optional CSC layer are added to the annotating table.
 
-1. The client can compute **which bytes it needs** from the viewport alone — no index
-   download, no metadata probing, no statistics.
-2. Those bytes are **already in the form the GPU wants** — no per-point object
-   construction, no coordinate zipping, no WKB parsing.
+A single output chunk for shapes is a **file**, including the display path `cell_seg`.
+Multiple shape chunks are a directory of Parquets. Points always use a directory.
 
-This profile achieves both by reordering rows into a deterministic grid of Parquet row
-groups and adding a small number of render-oriented columns.
+## 2. Coordinates
 
-**In scope:** transcript points, cell polygons, gene-major expression, image tiles,
-and the manifest that describes them.
+The writer applies the selected element-to-coordinate-system affine in float64, then
+stores **unrounded float32** x/y values. It assumes the selected coordinate system is
+level-0 image pixel space. For the tested Xenium setup, `global` has that meaning.
+SpatialData does not require every `global` coordinate system to be image pixels.
 
-**Out of scope:** clustering, linked views, annotation, neighbourhood analysis, and any
-other viewer feature. This is a data-access protocol.
-
-### Design invariants
-
-- **The profile is opt-in.** Default SpatialData write behaviour is unchanged.
-- **Canonical data is authoritative and preserved.** Render columns are additions; they
-  never replace canonical coordinates, identifiers, geometries or annotations.
-- **A store carrying the profile is still an ordinary SpatialData store.**
-  `spatialdata.read_zarr()` works unchanged; a client that does not understand the profile
-  ignores the extra columns and the manifest.
-
----
-
-## 2. Coordinate system
-
-All profile coordinates are **level-0 pixels of a chosen reference image**, referred to
-here as *display pixel space*.
-
-The mapping from canonical element coordinates to display pixels is the element's
-SpatialData affine transformation into a named coordinate system (`global` by default).
-It is recorded in the manifest:
+The transcript fragment records:
 
 ```json
 "display_transform": {
   "coordinate_space": "image-pixel",
   "coordinate_system": "global",
-  "affine_matrix": [[4.70588235, 0.0, 0.0], [0.0, 4.70588235, 0.0]],
+  "affine_matrix": [[4.70588235, 0, 0], [0, 4.70588235, 0]],
   "rounding": "nearest"
 }
 ```
 
-Producers **MUST** apply the affine in float64 and round half-to-even (`rint`). Applying
-it in float32 loses pixel accuracy on large images, and in some environments a float32
-array multiplied by a scalar stays float32.
+**Known metadata defect:** `rounding: "nearest"` is stale. No integer rounding is applied
+to the stored display coordinates; clients must follow `position_dtype: "float32"` and
+`position_scale: 1.0`. The writer rejects negative/non-finite display coordinates and
+coordinates above `2**24`. That upper limit does not guarantee 0.01-pixel accuracy.
 
-Display coordinates **MUST** be non-negative and **MUST** fit the declared integer dtype.
-A producer encountering values outside that range **MUST** fail rather than clamp: an
-out-of-range coordinate indicates a mismatched transform, not a rounding artefact.
+Automatic grid derivation uses origin `(0, 0)` and transforms the separate x/y maxima,
+rounding the resulting bounds. It is not a correct bounds algorithm for every affine.
+The current browser centroid reader supports identity, scale, translation and sequences,
+not arbitrary affine transforms. Native image placement assumes pixel coordinates and
+does not apply the image-to-target transform. These restrictions must be resolved or
+validated explicitly before claiming generic registered-store support.
 
----
+## 3. Grid and row groups
 
-## 3. The grid
+The grid has `x_min`, `y_min`, `tile_size`, `num_tiles_x` and `num_tiles_y`.
 
-A non-overlapping regular square grid over display pixel space, defined by five numbers:
-
-| field | meaning |
-|---|---|
-| `x_min`, `y_min` | grid origin, display pixels |
-| `tile_size` | tile edge length, display pixels |
-| `num_tiles_x`, `num_tiles_y` | grid dimensions |
-
-### Tile assignment
-
-```
+```text
 tile_x = floor((x_px - x_min) / tile_size)
 tile_y = floor((y_px - y_min) / tile_size)
-```
-
-Tile bounds are **half-open** `[min, max)`: a coordinate lying exactly on an internal
-boundary belongs to the **upper** tile.
-
-The single exception is the grid's outer edge. A coordinate equal to `x_max` or `y_max`
-is clamped into the last tile, so that a point on the boundary of the dataset is not
-lost. Coordinates beyond one tile past the extent are an error.
-
-### Tile numbering
-
-Tiles are numbered **x-major**:
-
-```
 tile_id = tile_x * num_tiles_y + tile_y
+file_index, local_row_group = divmod(tile_id, max_row_groups_per_file)
 ```
 
-`tile_id` ranges over `[0, num_tiles_x * num_tiles_y)`.
+The current default tile size is 250 display pixels; file capacity defaults to 400 row
+groups. Boundaries are half-open at internal tile edges. The intended outer-edge rule
+includes coordinates exactly on the upper edge in the last tile. The implementation
+also accepts the whole next tile-index band and clamps it; this is a conformance gap,
+not a precise spatial bounds check.
 
-### Choosing `tile_size`
+A producer must write **one physical row group per tile, including empty tiles**, and
+preserve every source row exactly once. Empty tiles occupy zero-row row groups.
+The writer sets an explicit row-group size and checks every staged Parquet footer before
+publishing it. It rejects a tile above 67,108,864 rows, the explicit implementation limit,
+rather than allow PyArrow to split the tile and invalidate formula-based addresses.
 
-`tile_size` is a tuning parameter, not a constant. It trades viewport granularity against
-storage: smaller tiles fetch less off-screen data but fragment the file into more,
-individually-compressed row groups.
+Chunk names are zero-padded to the width of the largest file index, and their manifest
+array is ordered numerically. This keeps manifest ordering and lexical directory reads
+consistent. A single shape file uses the fragment's `path`; multi-file entries use
+`directory` and `files`.
 
-The recommended target is **roughly 20 cells per tile**, which is the granularity at
-which a viewer fetches. On Xenium-density tissue this is about **250 display pixels**.
-Measured on a Xenium human pancreas section (140,702 cells):
+The canonical Parquet schema records `profile`, `storage_mode`,
+`max_row_groups_per_file` and `tile_grid`. It does **not** currently record the target
+coordinate system or affine with that grid; those are available through the profile and
+element metadata. A standalone generic spatial index needs an explicit frame association.
 
-| tile px | cells/tile | row groups | size vs untiled |
-|---|---|---|---|
-| 200 | 13.5 | 11,799 | +71% |
-| **250** | **21.0** | **7,535** | **+60%** |
-| 500 | 81.0 | 1,932 | +50% |
+The writer uses zstd and disables Parquet statistics. Formula-based access does not need
+statistics, but ordinary Python predicates will not thereby gain automatic tile pruning.
+A Python client must implement the same tile selection and read the selected row groups.
+No SpatialData spatial-query integration is added on these branches.
 
----
+Streaming defaults to multi-partition Dask input. Pass one spills by destination file;
+pass two sorts each spill bucket by tile. Memory depends on the largest partition and
+bucket, not a fixed row-count threshold, and a very dense bucket can still be large.
 
-## 4. Row groups and files
+## 4. Transcript display schema
 
-### One tile, one row group
-
-Each logical tile is written as **exactly one Parquet row group**, at index `tile_id`.
-Tiles containing no rows are written as **zero-row row groups**, not skipped. This is what
-lets a client address a tile by formula with no lookup table.
-
-A conforming file therefore contains exactly `num_tiles_x * num_tiles_y` row groups across
-all its parts.
-
-### Multi-part files
-
-Row groups are split across files:
-
-```
-file_index      = tile_id // max_row_groups_per_file
-local_row_group = tile_id %  max_row_groups_per_file
-```
-
-`max_row_groups_per_file` defaults to **400**.
-
-Splitting is **required**, not cosmetic. A Parquet reader must fetch a file's entire
-footer before reading any row group, and footer size grows with row-group count. On the
-pancreas dataset a single 7,535-row-group file has a **7.4 MB footer**; split into 19
-files each footer is ~410 KB, and a client only fetches footers for files its viewport
-actually touches.
-
-### File naming
-
-Chunk files are named `chunk_<n>.parquet` with `<n>` **zero-padded** to the width of the
-largest index (`chunk_00.parquet` … `chunk_18.parquet`).
-
-Padding is required because consumers disagree about ordering: a client indexes the
-manifest's `files` array by position, but tools that glob a directory sort
-lexicographically, where `chunk_10` precedes `chunk_2`. Padding makes the two agree.
-
-> Existing Celldega DegaFiles use unpadded names. That is safe there because only the
-> manifest-array consumer exists. Stores written under this profile use padded names.
-
-### Statistics
-
-Producers **SHOULD** write Parquet files with column statistics disabled. The tile formula
-is the spatial index, so no conforming client reads column-chunk min/max, and statistics
-inflate the footer the client must download before its first read.
-
-### Compression
-
-**zstd** is the recommended codec. On the pancreas dataset, snappy costs +38.5% over an
-untiled store while zstd costs +4.9% for the same content, at no meaningful write cost.
-Producers **MUST NOT** use a codec the target client cannot decode.
-
----
-
-## 5. Transcript points
-
-The canonical Points element gains two columns; every canonical column and the DataFrame
-index are preserved. Physical row order changes (rows are grouped by tile), which is
-permitted; rows **MUST NOT** be added, dropped or altered.
-
-### `display_xy`
-
-```
-fixed_size_list<uint32>[2]
-```
-
-Integer display-pixel coordinates. The Arrow child buffer is therefore already
-`[x0, y0, x1, y1, ...]`, directly usable as a deck.gl binary `getPosition` attribute.
-
-A client **MUST NOT** need to interleave separate x and y arrays.
-
-> A future revision may allow fixed-point sub-pixel coordinates
-> (`stored = pixel * 16`, `scale = 0.0625`). Producers of v0.1.0 write integer pixels
-> and declare `"scale": 1.0`.
-
-### `feature_code`
-
-```
-uint16  (or uint32 when the catalog exceeds 65535 entries)
-```
-
-An index into the feature catalog (§7).
-
----
-
-## 6. Cell polygons
-
-The canonical Shapes element gains two columns. The canonical geometry column and its
-GeoParquet `geo` metadata are preserved, so the file remains readable by
-`geopandas.read_parquet` and by SpatialData.
-
-### `display_geometry`
-
-```
-list<list<fixed_size_list<uint32>[2]>>
-```
-
-Polygon → rings → interleaved integer pixel vertices. A client lifts `getPolygon` from the
-flat coordinate child buffer and `startIndices` from the list offsets:
-
-```
-start_index[i] = ring_offsets[polygon_offsets[i]]
-```
-
-`display_geometry` is explicitly a **lossy display representation**: it holds the exterior
-ring only, and for a MultiPolygon only the largest part. The canonical geometry is retained
-alongside it and is authoritative.
-
-> **Interoperability warning.** GeoArrow permits `struct<x, y>` coordinates as well as
-> interleaved `fixed_size_list`. A client walking the nesting blindly will, on struct
-> coordinates, obtain the `x` child alone and render wrong polygons with no error. Clients
-> **MUST** verify the vertex level is a `FixedSizeList` before treating the buffer as
-> interleaved. (`geopandas.to_parquet` emits struct coordinates, so this is reachable in
-> practice.)
-
-### `cell_code`
-
-```
-uint32
-```
-
-Positional index into the annotating table's `obs` order, so cells can be coloured from an
-expression vector without a string join in the client.
-
-### Tile assignment
-
-A cell is assigned to **exactly one tile**, by its **centroid** in display pixel space.
-
-A polygon whose outline crosses into neighbouring tiles is **NOT** duplicated into them.
-Duplication would inflate the file and make cell counts wrong. A client rendering a
-viewport should expect polygons to overhang tile boundaries and, if it needs full coverage
-at the edges, fetch one extra ring of tiles.
-
----
-
-## 7. Feature catalog
-
-An ordered vocabulary mapping feature names to `feature_code`, stored as
-`meta_gene.parquet` with columns `name`, `feature_code`, `is_gene`.
-
-Ordering is normative:
-
-1. Codes `[0, n_genes)` are **genes**, in the annotating table's `var_names` order.
-2. Codes `>= n_genes` are **non-gene features** (negative controls, unassigned codewords),
-   sorted for reproducibility.
-
-Because genes come first and in table order, **a gene's `feature_code` is also its CBG row
-group** (§8). One integer addresses both a transcript's identity and its expression vector.
-
-Non-gene features **MUST** be retained and **MUST NOT** be folded into a gene; doing so
-would fabricate expression. `n_genes` is recorded in the manifest so a client can tell the
-two apart.
-
----
-
-## 8. Cell-by-gene expression
-
-Gene-major, one row group per gene, so selecting a gene fetches one row group and touches
-no transcript data.
-
-Columns:
-
-| column | type | meaning |
+| column | Arrow representation | meaning |
 |---|---|---|
-| `cell_id` | uint32 | cell code (§6), not a string barcode |
-| `expression` | float32 | non-zero value |
-| `gene` | string | gene name |
+| `display_xy` | `fixed_size_list<float32>[2]` | interleaved level-0 pixel x/y |
+| `feature_code` | `uint16`, or `uint32` for a catalog above 65,535 entries | position in the feature catalog |
 
-Zero values are omitted, including sparse *stored* zeros.
+Parquet stores a List; readers may recover Arrow FixedSizeList from embedded schema
+metadata. A client must accept either List or FixedSizeList with exactly two scalar
+coordinates per point. Interleaving removes an x/y zipper step, but this is not end-to-end
+zero-copy: decompression, WASM-to-Arrow IPC, buffer copies and GPU upload still occur.
+Celldega currently concatenates transcript coordinates into a Float64Array.
 
-Row group `i` holds catalog gene `i`, including genes with no expression (written as a
-zero-row row group), preserving the `feature_code == row group` invariant. The explicit
-mapping is written both in the manifest and in the Parquet schema metadata:
+The canonical points retain separate x/y and other source columns. Nested display
+columns are excluded because the tested Dask round-trip could stringify or reject them.
+The display files also avoid the tested parquet-wasm `ParquetFile.read({columns})` failure;
+Celldega reads every column of these small files. This is a workaround for the tested
+library versions, not a limitation of Parquet column projection in general.
 
-```
-gene_to_row_group   JSON object
-num_genes           integer
-storage_mode        "row_groups_cbg_chunked"
-```
+## 5. Polygon display schema and cell identity
 
-A client **MAY** use the mapping rather than assuming the identity.
+| column | Arrow representation | meaning |
+|---|---|---|
+| `display_geometry` | `list<list<fixed_size_list<float32>[2]>>` | polygon → rings → interleaved vertices |
+| `cell_code` | `uint32` | row position in the annotating table |
 
-> This is a **transpose**, not a redundant copy. SpatialData tables are stored cell-major
-> (CSR); assembling one gene's vector from them requires reading the whole matrix or doing
-> one random access per cell.
+The writer retains only the largest MultiPolygon part and its exterior ring for display.
+The original canonical geometry and GeoParquet metadata are retained. Cells are assigned
+by the centroid of that simplified polygon. They are not duplicated across intersected
+tiles. Fetching a neighboring ring may help viewport coverage but is not a guarantee for
+arbitrarily large polygons; exact spatial queries need a bounds-aware policy and filtering.
 
----
+Clients must accept List or FixedSizeList vertices and reject `struct<x,y>` when using
+the flat interleaved path. The polygon starts follow ring and polygon offsets.
 
-## 9. Image tiles
+Cell codes resolve the table's `region_key` and `instance_key` to shape IDs, retaining
+the corresponding table-row positions. The Xenium path also accepts a single annotated
+instance namespace when the boundary Shapes element has a different region name.
+Multi-region tables require an exact region match rather than an inferred association.
+Circle Shapes, labels-only segmentation and absent centroid arrays are not supported by
+this polygon/centroid path.
 
-*(Not implemented in v0.1.0; specified here for forward compatibility.)*
+## 6. Feature ordering, colors and expression
 
-Canonical OME-Zarr images are retained and authoritative. An optional derived WebP pyramid
-may be stored as Parquet row groups with columns `zoom`, `tile_x`, `tile_y`, `image_data`
-(encoded WebP bytes).
+Genes are read from the table's `var` index in its stored order. Observed features absent
+from that index are appended in sorted order and recorded in
+`feature_catalog.extra_features`. They often include controls; absence from a filtered
+table alone does not establish that a feature is biologically a control.
+`feature_catalog.n_genes` gives the split. The current Celldega metadata table uses uint16
+feature codes even when the producer selects uint32; catalogs above that range need a
+reader fix.
 
-Image tiles at zoom 0 **MUST** use the same level-0 pixel coordinate system as
-`display_xy` and `display_geometry`.
+**Gene colors:** `uns["gene_colors"]`, one hex string per `var_names` entry. No
+`var["color"]` column is written or read for this profile. Extra features use the client
+fallback palette. The gene-specific key/alignment rule is a proposed convention using
+Scanpy's familiar `uns` palette form. AnnData does not automatically realign it when
+variables are subset or reordered. Validate and synchronize it before regenerating a
+profile; the current writer preserves existing lists without checking their contents.
 
-Per channel the manifest records: source image element, source dimensions and dtype,
-reference pyramid level, tile size, per-zoom grid dimensions, display intensity min/max,
-gamma, colour, downsampling method, and WebP lossless/lossy setting.
+**Cluster colors:** `uns["<column>_colors"]` aligns with the categorical column's stored
+categories, including unused categories. The current reader incorrectly sorts observed
+values instead; this needs correction. Without a configured clustering the reader uses
+one `unclustered` category.
 
----
+**Expression:** the default writer computes population `mean`, `std`, `max` and
+`non_zero` fraction into `var`, then writes sparse `X` as `layers/X_csc`. The matrix
+shape remains cells × genes. `indptr[g]:indptr[g+1]` addresses a gene's data and cell
+indices. Data are currently cast to float32, indices and pointers to int32; these casts
+need range/precision validation for general inputs.
 
-## 10. The manifest
+CSC data/index chunks target two average genes' non-zeros with a 1,024-entry minimum.
+They are not per-gene row groups and need not end at gene boundaries. `indptr` is a single
+chunk. A gene can span multiple chunks. The fallback reads CSR `X` completely; dense and
+CSC `X` are unsupported by that fallback. Statistics currently mishandle stored sparse
+zeros and can overflow when squaring integer inputs. See the review for reproductions.
 
-A JSON document named `landscape_parameters.json`, conventionally at
-`<store>.zarr/visualization/celldega_regular_grid_v1/`.
+## 7. Images and optional DegaFiles export
 
-Paths inside it are **relative to the manifest's own directory**, so a client pointed at
-that directory resolves into the store without knowing the zarr layout:
+Fresh profiles enable native OME-Zarr images. Celldega uses `@vivjs/loaders`, not viv's
+deck.gl layers, and converts each tile to an 8-bit ImageBitmap for its existing layers.
+The intensity window comes from channel metadata when available, otherwise a dtype-based
+default. This is uint16 input support, not preserved 16-bit interactive contrast.
+
+An explicit `spatialdata.image_element` wins; otherwise the reader picks the first sorted
+image name from root Zarr v3 consolidated metadata. That selection is not coordinate-aware.
+V2 or unconsolidated stores need an explicit image element. Resolution selection assumes
+a dyadic pyramid and compatible tile sizes; arbitrary pyramids are not validated.
+
+`celldega.pre.spatialdata_images.spatialdata_to_dega_images` optionally writes WebP
+Parquet pyramids and returns manifest fragments. The caller must resolve channel paths
+relative to the intended manifest and install the returned fragments. For a native profile,
+remove `images` from `spatialdata.native` to use those WebP tiles. Removing the entire
+`spatialdata` block does not create the missing metadata/expression files of a DegaFiles
+bundle. A complete SpatialData-to-DegaFiles exporter is still future work.
+
+## 8. Manifest
+
+Minimal illustrative one-tile profile (additional producer fields omitted):
 
 ```json
 {
   "technology": "Xenium",
-  "use_row_groups": true,
-  "profile": "celldega_regular_grid_v1",
+  "profile": "grid_files_v1",
   "profile_version": "0.1.0",
+  "use_row_groups": true,
+  "use_int_index": true,
+  "segmentation_approach": ["default"],
+  "tile_size": 250.0,
   "tile_grid": {
-    "num_tiles_x": 137, "num_tiles_y": 55, "tile_size": 250.0,
-    "x_min": 0.0, "y_min": 0.0, "x_max": 34250.0, "y_max": 13750.0
+    "num_tiles_x": 1, "num_tiles_y": 1, "tile_size": 250.0,
+    "x_min": 0.0, "y_min": 0.0, "x_max": 250.0, "y_max": 250.0
   },
   "row_group_files": {
     "transcripts": {
-      "directory": "../../points/transcripts/points.parquet",
-      "files": ["chunk_00.parquet", "..."],
-      "max_row_groups_per_file": 400,
-      "total_row_groups": 7535,
-      "position_column": "display_xy",
-      "feature_column": "feature_code",
-      "columns": ["display_xy", "feature_code"]
+      "directory": "trx", "files": ["chunk_0.parquet"],
+      "max_row_groups_per_file": 400, "total_row_groups": 1,
+      "position_column": "display_xy", "position_dtype": "float32",
+      "feature_column": "feature_code", "render_only": true
     },
     "cell_segmentation": {
-      "directory": "../../shapes/cell_boundaries/shapes.parquet",
-      "geometry_column": "display_geometry",
-      "cell_id_column": "cell_code",
-      "columns": ["display_geometry", "cell_code"]
+      "path": "cell_seg", "max_row_groups_per_file": 400, "total_row_groups": 1,
+      "geometry_column": "display_geometry", "cell_id_column": "cell_code",
+      "render_only": true
     },
-    "cbg": { "directory": "cbg", "gene_to_row_group": {} },
     "images": {}
   },
-  "image_info": []
+  "feature_catalog": {"n_genes": 2, "extra_features": ["NegControlProbe_1"]},
+  "spatialdata": {
+    "store_url": "../..", "table": "table", "native": ["metadata", "cbg", "images"]
+  },
+  "source": {
+    "points_element": "transcripts", "shapes_element": "cell_boundaries",
+    "table_element": "table", "coordinate_system": "global"
+  },
+  "image_info": [],
+  "image_format": ".webp"
 }
 ```
 
-`columns` is the projection a client should request. Honouring it is what keeps canonical
-coordinates, identifiers and QC columns off the wire during rendering.
+Paths are relative to the manifest directory. `image_format` is a legacy setting, not
+proof that a WebP pyramid exists. There is no `columns` projection request.
 
-A client that does not recognise the profile-specific keys and finds no column names
-declared **SHOULD** fall back to reading all columns.
+`spatialdata.native` is intended to select components independently. Currently opting
+into `cbg` also constructs the adapter used unconditionally at metadata call sites;
+expression-only opt-in is not isolated. With `table_element=None`, the manifest omits
+table-backed native components and embeds feature names so `feature_code` remains decodable.
 
----
+## 9. Transport and lifecycle
 
-## 11. Transport requirements
+Parquet serving requires byte-range and suffix-range requests with correct `206` and
+`Content-Range` responses. Cross-origin hosting also requires CORS and exposed range
+headers. Celldega's local server implements these ranges on `adapt_dega`.
 
-A conforming host **MUST** support:
+Regenerate the profile when transcript rows, geometries, feature ordering, table row
+ordering, expression, transforms, grid settings or source image change. Refresh derived
+statistics/CSC after editing `X`; refresh palettes when changing gene/category ordering.
+The current manifest records descriptive source metadata, not fingerprints or automatic
+invalidation. A stale profile can therefore misrender silently.
 
-- **HTTP range requests**, answering `Range: bytes=a-b` with `206 Partial Content` and a
-  correct `Content-Range`.
-- **Suffix ranges** (`Range: bytes=-8`), which is how a reader locates the Parquet footer.
-- **CORS**, with `Access-Control-Allow-Origin` and `Access-Control-Expose-Headers`
-  including `Content-Range`, for browser clients on another origin.
+Ordinary `SpatialData.write()` preserves analysis data but rebuilds Parquet without this
+tile contract and does not copy `visualization/`. CSC content can round-trip, but custom
+CSC chunk sizes need not survive a rewrite. Tiling is currently a final post-save step.
 
-Hugging Face dataset `resolve/` URLs satisfy all three.
-
----
-
-## 12. Invalidation
-
-The profile is derived data and **MUST** be regenerated when any of the following change:
-
-- transcript rows are added, removed, or spatially moved;
-- the feature catalog or `var_names` order changes;
-- canonical cell identifiers or table row order change (invalidates `cell_code`);
-- cell geometries change;
-- the reference image, or the transform into display pixel space, changes;
-- `tile_size`, the grid origin, or `max_row_groups_per_file` change;
-- image intensity windowing or WebP settings change (images only).
-
-Changing a SpatialData transformation that does **not** affect the declared display
-coordinate system does not require regeneration, but this **MUST** be verified rather than
-assumed — compare the resulting affine against `display_transform.affine_matrix`.
-
-Producers **SHOULD** record a source fingerprint in `source` so staleness is detectable.
-
----
-
-## 13. Conformance checklist
-
-A producer conforms if:
-
-- [ ] total row groups equals `num_tiles_x * num_tiles_y`, empty tiles included
-- [ ] row group index equals `tile_x * num_tiles_y + tile_y`
-- [ ] every canonical row appears exactly once; index preserved
-- [ ] canonical columns and geometries are bit-identical to the source
-- [ ] `display_xy` is `fixed_size_list<uint32>[2]` with an interleaved child buffer
-- [ ] `display_geometry` vertices are `fixed_size_list`, not `struct<x,y>`
-- [ ] each cell appears exactly once, in its centroid's tile
-- [ ] `feature_code` matches the catalog; genes precede non-genes
-- [ ] CBG row group index equals `feature_code` for every gene
-- [ ] the store still opens with `spatialdata.read_zarr()`
-- [ ] the manifest validates and every declared file exists
+The overall operation is not transactional: separate assets are replaced in sequence.
+The one-shot Xenium entry point annotates the table before its initial write, while the
+existing-store entry point deletes and rewrites the table when expression indexing is
+requested. Preflight validation and staged publication with recovery remain future work.
