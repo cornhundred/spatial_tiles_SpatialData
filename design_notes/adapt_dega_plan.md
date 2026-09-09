@@ -33,8 +33,8 @@ from either.
 | 9 | cell × gene | `cbg/chunk_N.parquet` | `tables/table/X` (CSR) | 🟢 |
 | 10 | µm→px transform | `micron_to_image_transform.csv` | NGFF `coordinateTransformations` | 🟢 |
 | — | **wire 1–10 into the viewer** | — | — | 🔨 next |
-| 11 | images, 8-bit | `images/<ch>/` WebP | — | ➖ **keep as-is** |
-| 12 | images, 16-bit | — | OME-Zarr + viv | ⏸ deferred |
+| 11 | images, 8-bit | `images/<ch>/` WebP | — | ➖ **default**, via `celldega.pre` |
+| 12 | images, 16-bit | — | OME-Zarr via viv's loader | 🟢 opt-in, WebP still default |
 | 13 | transcripts | `trx/chunk_NN.parquet` | — | ➖ **keep as-is** |
 | 14 | cell boundaries | `cell_seg/chunk_NN.parquet` | — | ➖ **keep as-is** |
 | 15 | manifest | `landscape_parameters.json` | kept, gains a `spatialdata` block | ➖ **keep** |
@@ -114,31 +114,51 @@ zarr-native equivalent of "one row group per gene" and is strictly additive.
 
 ---
 
-## Deferred: 16-bit images via viv (row 12)
+## 16-bit images via viv (row 12) — done, opt-in
 
-Not a goal in itself — the reason to do it at all is to avoid a WebP pyramid inflating the
-store. Three obstacles, all measured, so the cost is known before anyone starts:
+**Correction.** An earlier version of this note claimed viv could not open SpatialData's
+images because it only understood the NGFF 0.4 layout. That was wrong. `loadOmeZarr`
+unwraps 0.5 explicitly:
 
-**viv 0.22.1 cannot open these images.** A layout mismatch, not a version string. Viv does
-`if ("multiscales" in rootAttrs)` (`@vivjs/loaders/dist/index.mjs:1084`) — the NGFF **0.4**
-top-level layout. SpatialData writes the **0.5** layout:
-
-```
-attrs keys        : ["ome", "spatialdata_attrs"]
-attrs.ome keys    : ["version", "multiscales", "omero"]
-attrs.multiscales : absent
+```js
+const ngff_v0_5_or_later = "ome" in unknownAttrs;
+const rootAttrs = ngff_v0_5_or_later ? unknownAttrs.ome : unknownAttrs;
 ```
 
-`loadOmeZarr` falls through and throws
-`TypeError: Cannot read properties of undefined (reading 'endsWith')`.
+The probe that "proved" the incompatibility was passing a zarrita `Location` where
+`loadOmeZarr` expects a **URL string**, which produces a broken store and an unrelated
+`TypeError`. Corrected, it reads the store fine:
 
-**Chunks are far too coarse.** `s0` is `1 × 4096 × 4096` uint16 = **33.5 MB per chunk per
-channel** uncompressed. A 256×256 window at `s3` already costs 86 ms because it pulls a
-whole 1×1721×4096 chunk. WebP tiles are ~512 px, which is why they feel fast.
+```
+resolutions : 5        base shape : 4,13770,34155 Uint16
+channels    : DAPI, ATP1A1/CD45/E-Cadherin, 18S, AlphaSMA/Vimentin   (from `omero`)
+getTile L4  : 2134x860 in 46 ms
+getTile L0  : 4096x4096 in 64 ms
+```
 
-**And a dependency bump.** `@vivjs/layers` peer-requires `~9.3.3` of `@deck.gl/core`,
-`@luma.gl/*` and `@deck.gl/geo-layers`; celldega is on `^9.0.12`. Satisfiable, but
-cross-cutting.
+Channel names come free from `omero` — exactly the `image_info` the profile writes by hand.
+
+Only `@vivjs/loaders` is used, never `@vivjs/layers`: the layers peer-require deck.gl
+`~9.3.3` against celldega's 9.0.35, while the loader has **no deck.gl dependency**. Tiles
+become ImageBitmaps, so the existing `TileLayer`, channel colours and intensity slider are
+untouched.
+
+### Why WebP stays the default
+
+| | canonical OME-Zarr | WebP pyramid |
+|---|---|---|
+| all 4 channels | **2.9 GB** | **25 MB** |
+| one full-res chunk | 16.2 MB | — |
+| one channel, whole pyramid | — | 5.4–7.5 MB |
+| tile size | 4096 px (set by chunking) | ~512 px |
+
+A single full-resolution chunk costs more than an entire channel's WebP pyramid, and the
+uint16 store is **116×** larger overall. This path buys true 16-bit windowing, not speed.
+For 8-bit speed against a SpatialData store, generate the WebP pyramid — which is what
+`celldega.pre` already does.
+
+The coarse chunking is a *writer* setting, so a viewer-friendly `1 × 1024 × 1024` option
+would narrow the gap if 16-bit ever becomes the common path. It does not change the 116×.
 
 ---
 
@@ -152,28 +172,49 @@ the `df_sig.parquet` gap resurfacing in a new place.
 
 ## What this removes from the spatialdata-io PR
 
-Only once Celldega ships the reader — until then the PR has to keep working against
-released Celldega, so this is a follow-up, not an edit to the open PR.
+There is **no two-step here**, and no need to ship code we plan to delete. The profile has
+never worked against released Celldega: `main` hardcodes `table.getChild('geometry')`, so
+reading `display_xy` needs `89c0ef3` at minimum, plus the List-vertex fix and the removal
+of the parquet-wasm projection. The spatialdata-io PR already depends on an unreleased
+Celldega.
+
+So the only ordering constraint is *within Celldega* — the adapt work has to land in the
+same release as the reader work, which is how the branches are already stacked. Given that,
+the spatialdata-io PR can be **born** in its simplified form, and these writers need never
+be proposed at all:
 
 | removed | lines |
 |---|---|
 | `cbg_parquet.py` (whole module) | 181 |
+| `webp_parquet.py` (whole module) — images now read natively | 322 |
 | `write_cell_metadata` in `shapes_parquet.py` | 57 |
 | `to_frame` + `_expression_stats` in `feature_catalog.py` | 92 |
 | `_write_cell_clusters`, `_write_micron_to_image_transform` + call sites | ~50 |
-| `test_cbg_parquet.py` + the corresponding assertions elsewhere | ~300 |
+| `test_cbg_parquet.py`, `test_webp_parquet.py`, assertions elsewhere | ~550 |
 | **added back**: `var["color"]` and `uns["<col>_colors"]` writers | +50 |
-| **net** | **≈ −630 of 4,264 (~15%)** |
+| **net** | **≈ −1,200 of 4,264 (~28%)** |
 
-Fifteen percent, not fifty: the bulk of the PR is the display Parquets and the tile
-machinery (`points_parquet.py` 559, `shapes_parquet.py` 269, `regular_grid.py` 247), all of
-which stay, plus the WebP path (322 + 213 tests) which is deliberately kept.
+None of it is written-then-deleted: it simply never enters the PR.
 
-The bigger effect is on what the PR *is*. Today it reads as "SpatialData learns Celldega's
-file formats", which invites the obvious objection. After this it reads as "SpatialData
-gains a spatial index over points and shapes, plus an image pyramid", with the viewer
-reading canonical AnnData for everything else. That is a much easier conversation, and it
-is worth more than the line count.
+What is left is exactly the surgical addition worth proposing:
+
+```
+regular_grid.py     247   tile math
+points_parquet.py   559   display points + row grouping
+shapes_parquet.py   269   display geometry + row grouping
+feature_catalog.py  177   stable feature ordering
+manifest.py         192   what was written, and how
+tiled_access.py    ~350   the two entry points
+tests             ~1,270
+```
+
+That is **row groups over the canonical data, plus the display Parquets** — a general
+mechanism for spatial tiling that happens to make Celldega fast, rather than SpatialData
+learning a viewer's file formats. The change in what the PR *is* matters more than the 28%.
+
+Dropping the WebP writer is possible only because images now read natively. Anyone wanting
+8-bit speed against a SpatialData store generates the pyramid with `celldega.pre`, which
+already does exactly that — it does not need to live in spatialdata-io.
 
 ---
 
