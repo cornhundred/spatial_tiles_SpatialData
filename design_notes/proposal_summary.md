@@ -80,9 +80,30 @@ behaves exactly as before, which is what keeps DegaFiles working.
 
 Measured on Xenium pancreas (8.1 M transcripts, 377 genes) and Prime skin (74 M, 5,006).
 
-| | |
-|---|---|
-| tiling the canonical points | +39.8% over an equivalently-compressed untiled store — fragmentation, not columns |
-| the gene-major layer | a second copy of the non-zeros: 4.5 MB pancreas, 54.8 MB skin. Smaller than the 11.9 / 150.3 MB Parquet it replaces |
-| a gene list, in the browser | 0.02 MB (was 4.5 MB) |
-| one gene, in the browser | 0.048 MB (was 4.5 MB), and bounded by the gene rather than the matrix |
+### On disk, measured on the rebuilt stores
+
+| | pancreas | skin |
+|---|---|---|
+| table, before → after | 7.9 MB → 17 MB | 58 MB → 162 MB |
+| profile dir, before → after | 140 MB → 100 MB | 600 MB → 415 MB |
+| **whole store** | **3.3 GB → 3.3 GB** | **5.1 GB → 5.1 GB** |
+
+The store does not grow. The gene-major layer costs 104 MB for skin against 55 MB for `X`
+itself — **1.9×**, not 1×, because chunking for single-gene reads compresses worse than
+chunking for whole-matrix reads. That is the tunable: `genes_per_chunk` defaults to 2, and
+raising it trades read cost for storage. Even so the layer is smaller than the 150 MB CBG
+Parquet it replaces, and the profile directory shrinks by more than the table grows.
+
+Tiling the canonical points still costs +39.8% over an equivalently-compressed untiled
+store — fragmentation, not the extra columns.
+
+### In the browser, measured against the rebuilt stores
+
+| | pancreas (2.6 M nnz) | skin (33.3 M nnz) |
+|---|---|---|
+| gene list | 0.017 MB | 0.126 MB |
+| one gene | 0.084 MB | 0.060 MB |
+| *whole matrix, the old way* | *4.5 MB* | *54.8 MB* |
+
+A 12.8× larger matrix does not cost 12.8× more per gene: the cost tracks non-zeros **per
+gene**, which is roughly constant across datasets.
