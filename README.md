@@ -80,7 +80,7 @@ experimental, not support for every valid SpatialData store. See the
 .
 ├── design_notes/          notes for reviewers (tracked here)
 ├── integration/           environment, test notebook, probes (tracked here)
-├── spatialdata/           fork, ignored -- should be on `main`, unmodified
+├── spatialdata/           fork, ignored -- branch adapt_dega_v2, unmodified
 ├── spatialdata-io/        fork, ignored -- branch adapt_dega_v2
 ├── celldega/              fork, ignored -- branch adapt_dega_v2
 └── data/                  ignored -- raw bundles and built stores, tens of GB
@@ -89,9 +89,9 @@ experimental, not support for every valid SpatialData store. See the
 ### Two directions
 
 The earlier `feat/xenium-celldega-regular-grid` and `feat/spatialdata-regular-grid-reader`
-branches made **SpatialData produce what Celldega reads**. The current `adapt_dega`
+branches made **SpatialData produce what Celldega reads**. The current `adapt_dega_v2`
 branches instead make **Celldega read what SpatialData already writes** (`obs`/`var`/`X`
-via zarrita), leaving transcript and boundary Parquets as the derived spatial files. See
+via zarrita), using the canonical transcript and boundary Parquets directly. See
 [`design_notes/adapt_dega_plan.md`](design_notes/adapt_dega_plan.md); the feasibility
 measurements behind it are reproducible via [`integration/probes/`](integration/probes/).
 

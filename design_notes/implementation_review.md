@@ -1,7 +1,7 @@
-# `adapt_dega` implementation review
+# `adapt_dega_v2` implementation review
 
 Updated 2026-09-10 for spatialdata-io and Celldega `adapt_dega_v2`, with unmodified
-SpatialData core. The latest fixes remain uncommitted pending review.
+SpatialData core. The reviewed changes are commits `feaedf0` and `e84a6c8`.
 
 ## Current conclusion
 
@@ -14,7 +14,8 @@ OME-Zarr images also come from the SpatialData store. No display Parquets are re
 The profile is experimental rather than a generic SpatialData specification. The reusable
 piece to discuss upstream is the spatial index contract: coordinate frame, grid, tile
 numbering, one physical row group per tile, instance association, discovery and lifecycle.
-The current manifest still contains Celldega fields.
+The canonical root manifest omits Celldega UI settings. Its remaining profile and entry
+names still need review as part of any generic proposal.
 
 Gene colors use `uns["gene_colors"]`, aligned to `var_names`; they are not stored in `var`.
 Cluster colors use `uns["<column>_colors"]`, aligned to the categorical column's stored
@@ -78,9 +79,10 @@ categories, including unused categories.
 
 ## Verification
 
-- spatialdata-io six tiling suites: 118 passed, 1 skipped.
-- Celldega complete JavaScript suite: 169 passed in 20 suites.
-- spatialdata-io complete suite: 171 passed, 36 skipped.
+- spatialdata-io canonical focused suite: 22 passed, 1 skipped.
+- Celldega complete JavaScript suite: 180 passed in 21 suites.
+- spatialdata-io complete suite: 173 passed, 36 skipped.
+- Celldega complete Python suite: 406 passed, 1 skipped.
 - The dense-tile regression confirms one footer row group for 1,048,577 rows.
 - The cell-link regression deliberately makes `obs_names` disagree with `instance_key`.
 - The palette regression includes nonalphabetical and unused categories.

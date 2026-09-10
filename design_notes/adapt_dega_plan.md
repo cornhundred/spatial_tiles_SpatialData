@@ -36,10 +36,11 @@ of the profile through ordinary saves.
 | DegaFiles | unchanged `landscape_parameters.json`, interleaved geometry and legacy readers |
 | optional WebP export | `celldega.pre.spatialdata_images.spatialdata_to_dega_images` |
 
-These components are wired into `landscape_ist.js`. With a table, the writer enables
-`metadata`, `cbg`, and `images` in the manifest. A no-table profile advertises images and
-carries its feature names directly. WebP remains the established DegaFiles
-path and an optional SpatialData export; it is not the new profile's default.
+These components are wired into `landscape_ist.js`. The canonical root manifest describes
+storage and omits viewer policy; Celldega's root-profile adapter enables native metadata,
+expression and images. A no-table profile carries feature names in the canonical transcript
+column. WebP remains the established DegaFiles path and an optional SpatialData export; it
+is not the new profile's default.
 
 Native transform support currently handles centroid identity, scale, translation, and
 sequences of those. Transcript and polygon display transforms are now taken from their

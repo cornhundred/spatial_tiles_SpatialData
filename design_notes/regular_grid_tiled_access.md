@@ -200,10 +200,12 @@ a dyadic pyramid and compatible tile sizes; arbitrary pyramids are not validated
 
 `celldega.pre.spatialdata_images.spatialdata_to_dega_images` optionally writes WebP
 Parquet pyramids and returns manifest fragments. The caller must resolve channel paths
-relative to the intended manifest and install the returned fragments. For a native profile,
-remove `images` from `spatialdata.native` to use those WebP tiles. Removing the entire
-`spatialdata` block does not create the missing metadata/expression files of a DegaFiles
-bundle. A complete SpatialData-to-DegaFiles exporter is still future work.
+relative to the intended file manifest and install the returned fragments. In a v1 file
+manifest, remove `images` from `spatialdata.native` to use those WebP tiles. The canonical
+root profile contains no image-tile entry, so Celldega reads OME-Zarr images natively.
+Removing the entire `spatialdata` block does not create the missing metadata/expression
+files of a DegaFiles bundle. A complete SpatialData-to-DegaFiles exporter is still future
+work.
 
 ## 8. Manifest
 
@@ -211,13 +213,8 @@ Minimal illustrative one-tile canonical profile (additional producer fields omit
 
 ```json
 {
-  "technology": "Xenium",
   "profile": "grid_files_v1",
   "profile_version": "0.1.0",
-  "use_row_groups": true,
-  "use_int_index": true,
-  "segmentation_approach": ["default"],
-  "tile_size": 250.0,
   "tile_grid": {
     "num_tiles_x": 1, "num_tiles_y": 1, "tile_size": 250.0,
     "x_min": 0.0, "y_min": 0.0, "x_max": 250.0, "y_max": 250.0
@@ -235,30 +232,29 @@ Minimal illustrative one-tile canonical profile (additional producer fields omit
       "max_row_groups_per_file": 400, "total_row_groups": 1,
       "geometry_column": "geometry", "geometry_encoding": "geoarrow.polygon",
       "cell_id_column": "cell_code", "render_only": false
-    },
-    "images": {}
+    }
   },
   "feature_catalog": {"n_genes": 2, "extra_features": ["NegControlProbe_1"]},
   "spatialdata": {
-    "store_url": ".", "table": "table", "native": ["metadata", "cbg", "images"]
+    "store_url": ".", "table": "table"
   },
   "source": {
+    "technology": "Xenium",
     "points_element": "transcripts", "shapes_element": "cell_boundaries",
     "table_element": "table", "coordinate_system": "global"
-  },
-  "image_info": [],
-  "image_format": ".webp"
+  }
 }
 ```
 
-Canonical paths are relative to the store root where the attribute lives. `image_format`
-is a legacy setting, not proof that a WebP pyramid exists. Celldega projects the declared
-render columns and falls back to a full read if projection fails.
+Canonical paths are relative to the store root where the attribute lives. The generic
+root block omits Celldega UI settings and image-tile configuration. Celldega adds its
+viewer defaults after discovering this block, projects the declared render columns, and
+falls back to a full read if projection fails.
 
-`spatialdata.native` is intended to select components independently. Currently opting
-into `cbg` also constructs the adapter used unconditionally at metadata call sites;
-expression-only opt-in is not isolated. With `table_element=None`, the manifest omits
-table-backed native components and embeds feature names so `feature_code` remains decodable.
+The v1 file manifest can use `spatialdata.native` to select components independently.
+The canonical profile omits that viewer policy, and Celldega defaults to native metadata,
+expression and images. With `table_element=None`, the manifest omits table-backed metadata;
+feature names are still available from the canonical transcript column.
 
 ## 9. Transport and lifecycle
 
@@ -273,8 +269,9 @@ The current manifest records descriptive source metadata, not fingerprints or au
 invalidation. A stale profile can therefore misrender silently.
 
 Ordinary `SpatialData.write()` preserves analysis data but rebuilds Parquet without this
-tile contract. In v1 it also does not copy `visualization/`. CSC content can round-trip, but custom
-CSC chunk sizes need not survive a rewrite. Tiling is currently a final post-save step.
+tile contract. In v1 it also does not copy `visualization/`. CSC content can round-trip,
+but custom CSC chunk sizes need not survive a rewrite. Tiling is currently a final
+post-save step.
 
 The overall operation is not transactional: separate assets are replaced in sequence.
 The one-shot Xenium entry point annotates the table before its initial write, while the

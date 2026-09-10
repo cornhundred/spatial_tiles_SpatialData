@@ -4,9 +4,9 @@ Reviewed local branch heads and uncommitted changes on 2026-09-10:
 
 | repository | branch | commit | role |
 |---|---|---|---|
-| spatialdata-io | `adapt_dega_v2` | `c935942` | profile producer |
-| celldega | `adapt_dega_v2` | `23b8ecc` | native reader and optional WebP export |
-| spatialdata | `main` | `ccf1ea0` | unmodified core |
+| spatialdata-io | `adapt_dega_v2` | `feaedf0` | profile producer |
+| celldega | `adapt_dega_v2` | `e84a6c8` | native reader and optional WebP export |
+| spatialdata | `adapt_dega_v2` | `ccf1ea0` | unmodified core |
 
 Start with [proposal_summary.md](proposal_summary.md), then
 [implementation_review.md](implementation_review.md) for confirmed issues. The current
@@ -44,11 +44,12 @@ adapted. DegaFiles still use the existing manifest and Parquet paths.
 
 ## Claims to qualify
 
-The grid is reusable, but the full manifest still contains Celldega settings. Existing
-SpatialData readers accept the store without core changes; ordinary saves do not preserve
-its profile or row-group contract. Alternate names alone do not establish compatibility
-with all valid SpatialData stores. Tile-aware Python reads can be cheap, but no core
-SpatialData spatial-query acceleration has been added.
+The grid is reusable, and the canonical root manifest now omits Celldega UI settings.
+Some profile and entry names still need upstream review. Existing SpatialData readers
+accept the store without core changes; ordinary saves do not preserve its profile or
+row-group contract. Alternate names alone do not establish compatibility with all valid
+SpatialData stores. Tile-aware Python reads can be cheap, but no core SpatialData
+spatial-query acceleration has been added.
 
 Two deferred defects are worth knowing before reading the code, both confirmed by
 reproduction and both currently latent for Xenium:
@@ -70,14 +71,14 @@ comparisons should not be used to promise general overhead or latency.
 
 ## Verification performed
 
-| check | 2026-09-09 result |
+| check | 2026-09-10 result |
 |---|---|
-| spatialdata-io six tiling suites | 118 passed, 1 skipped |
-| spatialdata-io complete suite | 171 passed, 36 skipped |
-| Celldega complete JS suite | 169 passed in 20 suites |
-| Celldega Python suite, integration interpreter | 407 passed |
-| raw-Xenium one-shot on real data | pancreas built in 49 s; store reopens with the CSC layer, `uns["gene_colors"]`, `var` statistics and a v3 table |
-| review diagnostics | confirmed cell-link, dense-row-group and palette fixes; retained save, affine, gene-palette lifecycle and statistics reproductions |
+| spatialdata-io canonical focused suite | 22 passed, 1 skipped |
+| spatialdata-io complete suite | 173 passed, 36 skipped |
+| Celldega complete JS suite | 180 passed in 21 suites |
+| Celldega Python suite, integration interpreter | 406 passed, 1 skipped |
+| raw-Xenium canonical build | pancreas built in 48 s; 8,073,840 points, 140,702 Shapes and `X_csc` reopen through SpatialData |
+| browser integration | canonical SpatialData and DegaFiles control both rendered at close zoom without browser errors |
 
 Commands and reproduction details are in [the review](implementation_review.md) and
 [integration/probes/README.md](../integration/probes/README.md). The environment-gated
@@ -85,7 +86,7 @@ raw-Xenium *test* still describes the superseded full profile and was not run; t
 path was instead exercised directly against the real pancreas dataset, which is what the
 row above records.
 
-The 2026-09-10 review rebuilt pancreas in 56 seconds and rendered both the canonical store
+The 2026-09-10 review rebuilt pancreas in 48 seconds and rendered both the canonical store
 and DegaFiles control in Celldega's browser path. CI still lacks an automated
 producer-to-browser rendering test. Test counts are a dated snapshot, not part of the
 protocol.

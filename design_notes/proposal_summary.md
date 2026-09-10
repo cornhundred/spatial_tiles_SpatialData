@@ -44,11 +44,11 @@ The reusable part is a spatial access contract: coordinate system, grid extent a
 numbering, tile-to-row-group mapping, source/instance associations, discovery, and
 invalidation. Display encodings and gene-major access can be optional extensions.
 
-The current manifest still uses Celldega names and settings such as
-`landscape_parameters.json`, `technology`, `segmentation_approach`, and `image_info`.
-Other tools can implement it, but renaming the profile `grid_files_v1` alone does not
-make every field viewer-independent. A small generic contract with a Celldega adapter is
-a reasonable next step for an upstream discussion.
+The canonical root manifest contains the grid, row-group paths, encodings, table index and
+source metadata. Celldega settings such as `segmentation_approach` and `image_info` stay in
+the client adapter. The older v1 file manifest retains those settings for compatibility.
+Names such as `grid_files_v1` and `cell_segmentation` still deserve review before proposing
+the contract upstream.
 
 Gene colors stay in **`uns["gene_colors"]`**, not `var["color"]`. This borrows the form
 of [Scanpy's categorical palettes](https://scanpy.scverse.org/en/stable/api/generated/scanpy.pl.umap.html),
