@@ -28,13 +28,13 @@ does not would see `List`.
 `List` or `FixedSizeList`, and a client must accept both. Requiring `FixedSizeList`
 regressed DegaFiles, whose polars `concat_list` column is a plain `List`.
 
-**What it must still reject:** `struct<x, y>`, which GeoArrow also permits and which
-`geopandas.to_parquet` emits. Walking child 0 there yields the x column alone and renders
-wrong polygons with no error.
+The canonical v2 path separately recognizes `struct<x, y>`, which GeoArrow permits and
+`geopandas.to_parquet` emits. It keeps the child buffers distinct and pairs them while
+building the PathLayer paths. The interleaved v1 path still handles List/FixedSizeList.
 
 ---
 
-## 2. parquet-wasm's column projection is broken
+## 2. parquet-wasm 0.7.2 column projection was broken upstream
 
 Passing `columns` to `ParquetFile.read` corrupts the IPC stream it emits; the failure
 surfaces later, in `tableFromIPC`:
@@ -55,11 +55,10 @@ Reproduced across:
 Only reads that pass no `columns` succeed. `readParquet(..., {columns})` silently ignores
 the argument instead, returning all columns.
 
-**Consequence for the design.** Column projection is unusable, so the profile writes its
-render columns to their own files instead: reading every column of a two-column file *is*
-the projection. This also removed the need for any projection support in the client.
-
-Worth reporting upstream.
+**Current consequence.** Celldega uses an npm alias carrying the projection fix. The
+canonical writer places `x`, `y`, and `feature_name` next to each other because the reader
+coalesces their byte span. Projection failures latch back to full reads for correctness.
+The v1 display-file layout remains available without projection.
 
 ---
 
@@ -76,9 +75,9 @@ column as a string**:
 | nested `display_xy` | silently returns as `string`, or fails |
 | pandas `ArrowDtype` | dask cannot read it back |
 
-**Consequence.** The canonical element keeps only its own columns and the tile row
-ordering; the render columns live in the profile's own files. This is the same change
-point 2 forced, arrived at independently.
+**Consequence.** The canonical element keeps only its own columns and tile ordering. The
+v2 viewer reads separate scalar x/y directly and combines them in the GPU shader, so no
+nested display column or separate display file is required.
 
 ---
 

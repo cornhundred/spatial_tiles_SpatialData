@@ -1,6 +1,6 @@
 # `adapt_dega`: implementation status and remaining work
 
-Updated 2026-09-09 against Celldega `2d6fc99` and spatialdata-io `88b8f10`.
+Updated 2026-09-10 against the `adapt_dega_v2` branches.
 This replaces the earlier running tally, whose pending tasks and `var["color"]`
 proposal no longer described the branches. See [the review](implementation_review.md)
 for reproductions and [the protocol](regular_grid_tiled_access.md) for the current layout.
@@ -9,8 +9,9 @@ for reproductions and [the protocol](regular_grid_tiled_access.md) for the curre
 
 The earlier `feat/spatialdata-regular-grid-reader` / `feat/xenium-celldega-regular-grid`
 branches produced a fuller Celldega bundle inside SpatialData. Both current branches are
-named `adapt_dega`: Celldega reads the existing store, while spatialdata-io adds spatial
-row groups, display Parquets and a small set of table annotations/indexes.
+named `adapt_dega_v2`: Celldega reads the existing store, while spatialdata-io adds
+spatial row groups, GeoArrow Shapes and a small set of table annotations/indexes. The
+canonical layout does not create a visualization directory.
 
 SpatialData core is unmodified. This proves the experimental stores can be read without
 a core patch; it does not establish an accepted extension specification or preservation
@@ -29,9 +30,10 @@ of the profile through ordinary saves.
 | cluster palettes | `uns["<column>_colors"]`, aligned to stored categorical order |
 | gene expression | `layers/X_csc`, falling back to a whole-CSR read of `X` |
 | images | native OME-Zarr via `@vivjs/loaders`, converted to 8-bit ImageBitmaps |
-| transcripts | display Parquets with interleaved float32 `display_xy` and integer `feature_code` |
-| cell boundaries | display Parquets with float32 `display_geometry` and `cell_code` |
-| manifest | `visualization/grid_files_v1/landscape_parameters.json` |
+| transcripts | canonical `x`, `y`, and dictionary `feature_name`; x/y stay separate through GPU upload |
+| cell boundaries | canonical `geoarrow.polygon` plus positional `cell_code` |
+| manifest | root `zarr.json` attribute `spatial_tiling` |
+| DegaFiles | unchanged `landscape_parameters.json`, interleaved geometry and legacy readers |
 | optional WebP export | `celldega.pre.spatialdata_images.spatialdata_to_dega_images` |
 
 These components are wired into `landscape_ist.js`. With a table, the writer enables
@@ -40,8 +42,9 @@ carries its feature names directly. WebP remains the established DegaFiles
 path and an optional SpatialData export; it is not the new profile's default.
 
 Native transform support currently handles centroid identity, scale, translation, and
-sequences of those. It does not complete general image registration, affine support,
-Python widget transforms, or physical scale-bar inference from SpatialData metadata.
+sequences of those. Transcript and polygon display transforms are now taken from their
+manifest entries. General image registration, Python widget transforms and physical
+scale-bar inference from SpatialData metadata remain incomplete.
 
 ## Gene colors remain in `uns`
 

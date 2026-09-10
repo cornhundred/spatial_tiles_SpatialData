@@ -1,11 +1,11 @@
 # Review guide
 
-Reviewed local branch heads on 2026-09-09:
+Reviewed local branch heads and uncommitted changes on 2026-09-10:
 
 | repository | branch | commit | role |
 |---|---|---|---|
-| spatialdata-io | `adapt_dega` | `88b8f10` | profile producer |
-| celldega | `adapt_dega` | `2d6fc99` | native reader and optional WebP export |
+| spatialdata-io | `adapt_dega_v2` | `c935942` | profile producer |
+| celldega | `adapt_dega_v2` | `23b8ecc` | native reader and optional WebP export |
 | spatialdata | `main` | `ccf1ea0` | unmodified core |
 
 Start with [proposal_summary.md](proposal_summary.md), then
@@ -17,12 +17,13 @@ layout and known conformance gaps are in [regular_grid_tiled_access.md](regular_
 
 1. `spatialdata-io/src/spatialdata_io/experimental/regular_grid.py`: tile math and numbering.
 2. `feature_catalog.py`: table feature order followed by extra observed features.
-3. `points_parquet.py`: canonical/display modes, stable sorting and multi-partition spill.
-4. `shapes_parquet.py`: canonical GeoParquet, lossy display geometry and cell-code mapping.
+3. `points_parquet.py`: canonical/display modes, column ordering, stable sorting and spill.
+4. `shapes_parquet.py`: canonical GeoArrow, optional display geometry and cell-code mapping.
 5. `expression_index.py` and `display_colors.py`: `var` statistics, CSC and `uns` palettes.
 6. `tiled_access.py` and `manifest.py`: sequencing, references and validation.
 7. `celldega/js/spatialdata/`: AnnData reader, adapter, manifest options and native images.
-8. `celldega/js/viz/landscape_ist.js` and metadata/cell-layer call sites: actual opt-in behavior.
+8. `celldega/js/viz/landscape_ist.js`, `separated_scatterplot_layer.js`, and tile readers:
+   canonical rendering and the unchanged DegaFiles branch.
 9. `celldega/src/celldega/pre/spatialdata_images.py`: the optional WebP exporter.
 
 The original full-profile branches are superseded. The current producer no longer writes
@@ -32,9 +33,8 @@ adapted. DegaFiles still use the existing manifest and Parquet paths.
 
 ## Decisions to retain
 
-- Keep scientific x/y and geometry authoritative; put interleaved float32 display geometry
-  in separate Parquets. The tested Dask round-trip and parquet-wasm projection behavior
-  support this choice. It avoids coordinate interleaving in JS, not every memory copy.
+- Keep scientific x/y and geometry authoritative. Canonical x/y remain separate through
+  GPU upload and are combined in the vertex shader. Canonical polygons use GeoArrow.
 - Retain a CSR primary matrix where appropriate and add a CSC layer for column reads.
   CSC is another storage orientation of the same matrix, not a mathematical transpose.
 - Keep gene colors in `uns["gene_colors"]`. Document the explicit `var_names` association
@@ -85,7 +85,7 @@ raw-Xenium *test* still describes the superseded full profile and was not run; t
 path was instead exercised directly against the real pancreas dataset, which is what the
 row above records.
 
-The existing notebook records manual comparisons on pancreas and skin. This review did
-not rebuild the large reference datasets or rerun browser rendering. The unit suites do
-not provide an automated producer-to-browser rendering test, which remains a significant
-coverage gap. Test counts are a dated snapshot, not part of the protocol.
+The 2026-09-10 review rebuilt pancreas in 56 seconds and rendered both the canonical store
+and DegaFiles control in Celldega's browser path. CI still lacks an automated
+producer-to-browser rendering test. Test counts are a dated snapshot, not part of the
+protocol.

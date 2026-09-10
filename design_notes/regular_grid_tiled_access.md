@@ -1,8 +1,8 @@
 # Regular-grid tiled access profile (`grid_files_v1`)
 
-**Status:** experimental · **Profile version:** 0.1.0 · **Reviewed:** 2026-09-09
+**Status:** experimental · **Profile version:** 0.1.0 · **Reviewed:** 2026-09-10
 
-This describes the current `adapt_dega` layout and its intended access contract. It
+This describes the current `adapt_dega_v2` layout and its intended access contract. It
 replaces the earlier `celldega_regular_grid_v1` draft. Celldega is the reference client;
 the grid and encodings are reusable, while parts of the manifest remain Celldega-specific.
 This is not an accepted SpatialData standard. Known conformance gaps are called out below
@@ -23,25 +23,28 @@ sample.zarr/
 │   ├── uns/gene_colors
 │   ├── uns/<cluster_column>_colors       when requested and categorical
 │   └── layers/X_csc                      gene-major copy of sparse X
-└── visualization/grid_files_v1/
-    ├── landscape_parameters.json
-    ├── trx/                             display_xy + feature_code
-    └── cell_seg                          file or directory: display_geometry + cell_code
+└── zarr.json
+    └── attributes.spatial_tiling         root manifest
 ```
 
-Original points and polygons are authoritative. The display Parquets contain derived
-coordinates and compact positional codes. In the current writer, only canonical Shapes
-also acquire `cell_code`; canonical Points do not acquire display columns. Statistics,
-palettes and the optional CSC layer are added to the annotating table.
+Original points and polygons are authoritative and are also the visualization source.
+Canonical Points keep separate x/y and dictionary feature values. Canonical Shapes use
+`geoarrow.polygon` and acquire `cell_code`. Statistics, palettes and the optional CSC
+layer are added to the annotating table.
 
-A single output chunk for shapes is a **file**, including the display path `cell_seg`.
-Multiple shape chunks are a directory of Parquets. Points always use a directory.
+`profile_layout="v1"` is retained as a compatibility layout. It adds
+`visualization/grid_files_v1/landscape_parameters.json`, interleaved `display_xy`, and
+simplified `display_geometry`. A single output chunk for shapes is a file; multiple shape
+chunks are a directory. Points always use a directory.
 
 ## 2. Coordinates
 
-The writer applies the selected element-to-coordinate-system affine in float64, then
-stores **unrounded float32** x/y values. It assumes the selected coordinate system is
-level-0 image pixel space. For the tested Xenium setup, `global` has that meaning.
+Canonical coordinates stay in element space. The manifest records the selected
+element-to-coordinate-system affine; Celldega applies it to transcript coordinates in the
+GPU shader and to polygon paths during their existing CPU path construction. The v1
+layout stores transformed, unrounded float32 display coordinates instead. Both layouts
+assume the target coordinate system is level-0 image pixel space. For the tested Xenium
+setup, `global` has that meaning.
 SpatialData does not require every `global` coordinate system to be image pixels.
 
 The transcript fragment records:
@@ -55,10 +58,9 @@ The transcript fragment records:
 }
 ```
 
-**Known metadata defect:** `rounding: "nearest"` is stale. No integer rounding is applied
-to the stored display coordinates; clients must follow `position_dtype: "float32"` and
-`position_scale: 1.0`. The writer rejects negative/non-finite display coordinates and
-coordinates above `2**24`. That upper limit does not guarantee 0.01-pixel accuracy.
+`rounding: "nearest"` describes grid-bound derivation and must not be interpreted as
+rounding canonical or v1 display coordinates. The v1 writer rejects negative/non-finite
+display coordinates and coordinates above `2**24`.
 
 Automatic grid derivation uses origin `(0, 0)` and transforms the separate x/y maxima,
 rounding the resulting bounds. It is not a correct bounds algorithm for every affine.
@@ -109,40 +111,40 @@ Streaming defaults to multi-partition Dask input. Pass one spills by destination
 pass two sorts each spill bucket by tile. Memory depends on the largest partition and
 bucket, not a fixed row-count threshold, and a very dense bucket can still be large.
 
-## 4. Transcript display schema
+## 4. Transcript schemas
 
-| column | Arrow representation | meaning |
+| layout | columns | meaning |
 |---|---|---|
-| `display_xy` | `fixed_size_list<float32>[2]` | interleaved level-0 pixel x/y |
-| `feature_code` | `uint16`, or `uint32` for a catalog above 65,535 entries | position in the feature catalog |
+| canonical | `x`, `y`, dictionary `feature_name` | element coordinates and source feature values |
+| v1 | `display_xy`, integer `feature_code` | interleaved level-0 pixel x/y and feature catalog position |
 
-Parquet stores a List; readers may recover Arrow FixedSizeList from embedded schema
+For v1, Parquet stores a List; readers may recover Arrow FixedSizeList from embedded schema
 metadata. A client must accept either List or FixedSizeList with exactly two scalar
 coordinates per point. Interleaving removes an x/y zipper step, but this is not end-to-end
 zero-copy: decompression, WASM-to-Arrow IPC, buffer copies and GPU upload still occur.
-Celldega currently concatenates transcript coordinates into a Float64Array.
+The canonical Celldega path instead keeps one binary sublayer per Arrow record batch and
+binds x and y as separate scalar attributes. A small ScatterplotLayer shader constructs
+the position and applies the affine on the GPU, with no coordinate zipper or concatenation.
 
-The canonical points retain separate x/y and other source columns. Nested display
-columns are excluded because the tested Dask round-trip could stringify or reject them.
-The display files also avoid the tested parquet-wasm `ParquetFile.read({columns})` failure;
-Celldega reads every column of these small files. This is a workaround for the tested
-library versions, not a limitation of Parquet column projection in general.
+Canonical columns are ordered `x`, `y`, feature first because the patched parquet-wasm
+projection coalesces reads across the byte span from the first requested column to the
+last. On pancreas, requesting those columns cost 19.7 KiB versus 18.2 KiB for the old
+display file (1.08×). Celldega latches back to full-column reads if projection fails.
 
-## 5. Polygon display schema and cell identity
+## 5. Polygon schemas and cell identity
 
-| column | Arrow representation | meaning |
+| layout | geometry | identity |
 |---|---|---|
-| `display_geometry` | `list<list<fixed_size_list<float32>[2]>>` | polygon → rings → interleaved vertices |
-| `cell_code` | `uint32` | row position in the annotating table |
+| canonical | `geometry: list<list<struct<x,y>>>`, extension `geoarrow.polygon` | `cell_code: uint32` |
+| v1 | `display_geometry: list<list<fixed_size_list<float32>[2]>>` | `cell_code: uint32` |
 
-The writer retains only the largest MultiPolygon part and its exterior ring for display.
-The original canonical geometry and GeoParquet metadata are retained. Cells are assigned
-by the centroid of that simplified polygon. They are not duplicated across intersected
-tiles. Fetching a neighboring ring may help viewport coverage but is not a guarantee for
-arbitrarily large polygons; exact spatial queries need a bounds-aware policy and filtering.
+Canonical GeoArrow retains the full geometry. The v1 writer retains only the largest
+MultiPolygon part and its exterior ring. Cells are assigned to tiles by centroid and are
+not duplicated across intersected tiles. Fetching a neighboring ring may help viewport
+coverage but is not a guarantee for arbitrarily large polygons.
 
-Clients must accept List or FixedSizeList vertices and reject `struct<x,y>` when using
-the flat interleaved path. The polygon starts follow ring and polygon offsets.
+Celldega accepts List or FixedSizeList vertices for v1 and separated `struct<x,y>` for
+canonical GeoArrow. The polygon starts follow ring and polygon offsets.
 
 Cell codes resolve the table's `region_key` and `instance_key` to shape IDs, retaining
 the corresponding table-row positions. The Xenium path also accepts a single annotated
@@ -169,9 +171,8 @@ variables are subset or reordered. Validate and synchronize it before regenerati
 profile; the current writer preserves existing lists without checking their contents.
 
 **Cluster colors:** `uns["<column>_colors"]` aligns with the categorical column's stored
-categories, including unused categories. The current reader incorrectly sorts observed
-values instead; this needs correction. Without a configured clustering the reader uses
-one `unclustered` category.
+categories, including unused categories. The reader retains that order. Without a
+configured clustering the reader uses one `unclustered` category.
 
 **Expression:** the default writer computes population `mean`, `std`, `max` and
 `non_zero` fraction into `var`, then writes sparse `X` as `layers/X_csc`. The matrix
@@ -206,7 +207,7 @@ bundle. A complete SpatialData-to-DegaFiles exporter is still future work.
 
 ## 8. Manifest
 
-Minimal illustrative one-tile profile (additional producer fields omitted):
+Minimal illustrative one-tile canonical profile (additional producer fields omitted):
 
 ```json
 {
@@ -223,21 +224,23 @@ Minimal illustrative one-tile profile (additional producer fields omitted):
   },
   "row_group_files": {
     "transcripts": {
-      "directory": "trx", "files": ["chunk_0.parquet"],
+      "directory": "points/transcripts/points.parquet", "files": ["chunk_0.parquet"],
       "max_row_groups_per_file": 400, "total_row_groups": 1,
-      "position_column": "display_xy", "position_dtype": "float32",
-      "feature_column": "feature_code", "render_only": true
+      "position_encoding": "separate_columns", "position_columns": ["x", "y"],
+      "feature_column": "feature_name", "feature_encoding": "dictionary",
+      "render_only": false
     },
     "cell_segmentation": {
-      "path": "cell_seg", "max_row_groups_per_file": 400, "total_row_groups": 1,
-      "geometry_column": "display_geometry", "cell_id_column": "cell_code",
-      "render_only": true
+      "path": "shapes/cell_boundaries/shapes.parquet",
+      "max_row_groups_per_file": 400, "total_row_groups": 1,
+      "geometry_column": "geometry", "geometry_encoding": "geoarrow.polygon",
+      "cell_id_column": "cell_code", "render_only": false
     },
     "images": {}
   },
   "feature_catalog": {"n_genes": 2, "extra_features": ["NegControlProbe_1"]},
   "spatialdata": {
-    "store_url": "../..", "table": "table", "native": ["metadata", "cbg", "images"]
+    "store_url": ".", "table": "table", "native": ["metadata", "cbg", "images"]
   },
   "source": {
     "points_element": "transcripts", "shapes_element": "cell_boundaries",
@@ -248,8 +251,9 @@ Minimal illustrative one-tile profile (additional producer fields omitted):
 }
 ```
 
-Paths are relative to the manifest directory. `image_format` is a legacy setting, not
-proof that a WebP pyramid exists. There is no `columns` projection request.
+Canonical paths are relative to the store root where the attribute lives. `image_format`
+is a legacy setting, not proof that a WebP pyramid exists. Celldega projects the declared
+render columns and falls back to a full read if projection fails.
 
 `spatialdata.native` is intended to select components independently. Currently opting
 into `cbg` also constructs the adapter used unconditionally at metadata call sites;
@@ -269,7 +273,7 @@ The current manifest records descriptive source metadata, not fingerprints or au
 invalidation. A stale profile can therefore misrender silently.
 
 Ordinary `SpatialData.write()` preserves analysis data but rebuilds Parquet without this
-tile contract and does not copy `visualization/`. CSC content can round-trip, but custom
+tile contract. In v1 it also does not copy `visualization/`. CSC content can round-trip, but custom
 CSC chunk sizes need not survive a rewrite. Tiling is currently a final post-save step.
 
 The overall operation is not transactional: separate assets are replaced in sequence.

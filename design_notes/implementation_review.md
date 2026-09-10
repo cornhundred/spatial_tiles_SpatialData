@@ -1,17 +1,15 @@
 # `adapt_dega` implementation review
 
-Reviewed 2026-09-09 against spatialdata-io `adapt_dega` at `88b8f10`, Celldega
-`adapt_dega` at `2d6fc99`, and the unmodified SpatialData core at `ccf1ea0`.
-The fixes below are uncommitted workspace changes on top of those revisions.
+Updated 2026-09-10 for spatialdata-io and Celldega `adapt_dega_v2`, with unmodified
+SpatialData core. The latest fixes remain uncommitted pending review.
 
 ## Current conclusion
 
 The design is a reasonable Xenium-focused integration boundary. SpatialData remains the
 analysis representation. Canonical Points and Shapes receive deterministic spatial row
-grouping, while interleaved coordinates and simplified polygon geometry live in derived
-display Parquets. Celldega reads table metadata, expression and OME-Zarr images from the
-SpatialData store. This avoids requiring interleaved scientific coordinates in SpatialData
-and confines the larger producer change to spatialdata-io.
+grouping. Points retain separate x/y columns and Shapes use GeoArrow polygons; Celldega
+consumes both directly and applies their transforms. Table metadata, expression and
+OME-Zarr images also come from the SpatialData store. No display Parquets are required.
 
 The profile is experimental rather than a generic SpatialData specification. The reusable
 piece to discuss upstream is the spatial index contract: coordinate frame, grid, tile
@@ -23,6 +21,16 @@ Cluster colors use `uns["<column>_colors"]`, aligned to the categorical column's
 categories, including unused categories.
 
 ## Fixes in this review
+
+0. **Canonical discovery and rendering.** Celldega falls back from
+   `landscape_parameters.json` to `zarr.json` root attributes, projects canonical point
+   columns, sends separate x/y buffers to a custom GPU shader, and accepts
+   `geoarrow.polygon` boundaries. DegaFiles keep the file-first legacy path.
+
+   `@geoarrow/deck.gl-layers` 0.3.2 was evaluated first. Its separated-coordinate helper
+   allocates a new interleaved `Float64Array` and loops over every coordinate before
+   rendering. The custom transcript shader is therefore the narrower zero-copy path; no
+   GeoArrow deck.gl dependency is added to Celldega.
 
 1. **Cell identity.** Boundary `cell_code` values now use absolute table row positions
    resolved through the SpatialData table's `region_key` and `instance_key`. The Xenium
@@ -64,8 +72,9 @@ categories, including unused categories.
   an explicit contract.
 - Existing-store expression indexing is not transactional because it deletes and rewrites
   the table. The optimized one-shot Xenium path avoids this particular risk.
-- There is no automated writer-to-browser rendering test. Unit tests verify the producer
-  and reader pieces, while the large-data notebook remains a manual integration check.
+- Browser rendering is still an integration check rather than an automated CI test. The
+  2026-09-10 check rendered both the rebuilt pancreas canonical store and its DegaFiles
+  control at close zoom with no new browser errors.
 
 ## Verification
 

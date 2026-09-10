@@ -19,8 +19,10 @@ For an existing store, the opt-in tiling pass reads the store and:
 
 - **reorders** canonical Points and Shapes into a deterministic tile grid, intended to
   have one Parquet row group per tile, for selective reads by a tile-aware client;
-- **writes display Parquets** under `visualization/grid_files_v1/`, and adds gene
-  statistics, palettes and a CSC expression layer to the table.
+- in the proposed **canonical** layout, writes no display files: canonical Points keep
+  separate `x`/`y`, canonical Shapes use GeoArrow polygons, and the root `zarr.json`
+  carries the `spatial_tiling` manifest;
+- adds gene statistics, palettes and a CSC expression layer to the table.
 
 ```
 sample.zarr/
@@ -30,10 +32,8 @@ sample.zarr/
 │   ├── var[mean|std|max|non_zero]          gene statistics
 │   ├── uns["gene_colors"]                 gene colors, in var_names order
 │   └── layers/X_csc                        gene-major expression, small fixed chunks
-└── visualization/grid_files_v1/            derived, regenerable
-    ├── landscape_parameters.json           the manifest
-    ├── trx/                                display_xy + feature_code
-    └── cell_seg                            file or directory: display_geometry + cell_code
+└── zarr.json
+    └── attributes.spatial_tiling            root manifest for the canonical layout
 ```
 
 Cell names and centroids, gene names, clusters, expression and images are read from the
@@ -42,10 +42,14 @@ transform; general registration and physical scale inference still need work. Na
 OME-Zarr images are the new profile's default and are converted to 8-bit for rendering.
 An optional WebP pyramid can be built by `celldega.pre.spatialdata_images`.
 
-The tiled store is readable by ordinary SpatialData. Deleting `visualization/` removes the
-display assets, but leaves row grouping, `cell_code` and the table additions. An ordinary
-SpatialData save to a new store retains analysis content but loses the profile and tile
-layout; regenerate the profile after saving or changing source data.
+The tiled store is readable by ordinary SpatialData. An ordinary SpatialData save to a
+new store retains analysis content but does not promise to preserve the physical row-group
+layout, so regenerate the profile after saving or changing source data.
+
+`profile_layout="v1"` remains available for comparison and backward compatibility. It
+writes interleaved display Parquets plus
+`visualization/grid_files_v1/landscape_parameters.json`. Celldega continues to support
+standalone DegaFiles through their existing `landscape_parameters.json`.
 
 The entry point accepts alternate element/feature names, for example:
 
@@ -58,6 +62,7 @@ add_spatial_tiling(
     shapes_element="cell_polygons",
     feature_key="gene",
     technology="MERSCOPE",
+    profile_layout="canonical",
 )
 ```
 
@@ -76,8 +81,8 @@ experimental, not support for every valid SpatialData store. See the
 ├── design_notes/          notes for reviewers (tracked here)
 ├── integration/           environment, test notebook, probes (tracked here)
 ├── spatialdata/           fork, ignored -- should be on `main`, unmodified
-├── spatialdata-io/        fork, ignored -- branch adapt_dega
-├── celldega/              fork, ignored -- branch adapt_dega
+├── spatialdata-io/        fork, ignored -- branch adapt_dega_v2
+├── celldega/              fork, ignored -- branch adapt_dega_v2
 └── data/                  ignored -- raw bundles and built stores, tens of GB
 ```
 
@@ -114,8 +119,8 @@ for r in spatialdata spatialdata-io; do
   git -C $r fetch upstream --tags
 done
 
-git -C spatialdata-io switch adapt_dega
-git -C celldega     switch adapt_dega
+git -C spatialdata-io switch adapt_dega_v2
+git -C celldega     switch adapt_dega_v2
 
 bash integration/setup_env.sh          # uv venv + editable installs + npm ci + build
 git config core.hooksPath .githooks     # strips notebook widget state before commits
@@ -160,6 +165,7 @@ xenium_spatially_tiled(
     "data/pancreas_full.zarr",
     nucleus_boundaries=False, cells_labels=False, nucleus_labels=False,
     morphology_mip=False, morphology_focus=True, aligned_images=False,
+    tiling={"profile_layout": "canonical"},
 )
 ```
 
@@ -231,5 +237,5 @@ from PATH, which can select a different Python installation.
   initially; the existing-store entry point still rewrites the table when indexing expression.
 - Cell hover labels need `cats.nameMapping_inv`, which the profile does not populate.
 - The Xenium `transcripts.zarr` fast path is not implemented — deferred, not cut.
-- There is **no automated end-to-end test that a written store renders**. The notebook is
-  manual, and that gap is what let most of the interop findings through.
+- Browser rendering remains a manual integration check; unit tests cover manifest
+  discovery, both transcript encodings, both polygon encodings and DegaFiles defaults.

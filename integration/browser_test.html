@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Celldega storage compatibility test</title>
+    <style>
+      html,
+      body,
+      #landscape {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      #status {
+        position: fixed;
+        z-index: 10;
+        background: white;
+        padding: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">loading</div>
+    <div id="landscape"></div>
+    <script type="module">
+      import celldega from '../celldega/docs/assets/js/celldega.js';
+
+      const params = new URLSearchParams(location.search);
+      const dataset = params.get('dataset') || 'pancreas_adapt_v2.zarr';
+      const status = document.querySelector('#status');
+      window.testStatus = { state: 'loading', dataset };
+      try {
+        window.landscape = await celldega.landscape_ist(
+          document.querySelector('#landscape'),
+          {},
+          '',
+          17000,
+          6800,
+          0,
+          0,
+          `${location.origin}/data/${dataset}`,
+          dataset,
+          0.25,
+          1000,
+          700
+        );
+        window.testStatus.state = 'ready';
+        status.textContent = `ready: ${dataset}`;
+      } catch (error) {
+        window.testStatus = {
+          state: 'error',
+          dataset,
+          message: error?.message,
+          stack: error?.stack,
+        };
+        status.textContent = `error: ${error?.message}`;
+        console.error(error);
+      }
+    </script>
+  </body>
+</html>
