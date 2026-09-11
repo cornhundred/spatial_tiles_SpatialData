@@ -1,6 +1,6 @@
 # `adapt_dega`: implementation status and remaining work
 
-Updated 2026-09-10 against the `adapt_dega_v2` branches.
+Updated 2026-09-11 against the `adapt_dega_v2` branches.
 This replaces the earlier running tally, whose pending tasks and `var["color"]`
 proposal no longer described the branches. See [the review](implementation_review.md)
 for reproductions and [the protocol](regular_grid_tiled_access.md) for the current layout.
@@ -31,7 +31,7 @@ of the profile through ordinary saves.
 | gene expression | `layers/X_csc`, falling back to a whole-CSR read of `X` |
 | images | native OME-Zarr via `@vivjs/loaders`, converted to 8-bit ImageBitmaps |
 | transcripts | canonical `x`, `y`, and dictionary `feature_name`; x/y stay separate through GPU upload |
-| cell boundaries | canonical `geoarrow.polygon` plus positional `cell_code` |
+| cell boundaries | canonical `geoarrow.polygon` plus positional `cell_code`; visible paths feed the standard `PathLayer` |
 | manifest | root `zarr.json` attribute `spatial_tiling` |
 | DegaFiles | unchanged `landscape_parameters.json`, interleaved geometry and legacy readers |
 | optional WebP export | `celldega.pre.spatialdata_images.spatialdata_to_dega_images` |
@@ -46,6 +46,16 @@ Native transform support currently handles centroid identity, scale, translation
 sequences of those. Transcript and polygon display transforms are now taken from their
 manifest entries. General image registration, Python widget transforms and physical
 scale-bar inference from SpatialData metadata remain incomplete.
+
+The transcript vertex shader multiplies `(x, y, 1)` by the affine matrix and emits the
+transformed x/y at world `z = 0`, as required by the 2D orthographic view. Polygon
+coordinates are currently transformed while visible JavaScript path arrays are built on
+the CPU. Celldega uses its own ScatterplotLayer and the standard deck.gl `PathLayer`; it
+does not depend on `@geoarrow/deck.gl-layers`.
+
+Column projection currently comes from the temporary
+`@cornhundred/parquet-wasm@0.7.2-celldega.0` package until the fix is merged and released
+upstream.
 
 ## Gene colors remain in `uns`
 

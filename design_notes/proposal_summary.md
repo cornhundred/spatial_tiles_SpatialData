@@ -8,6 +8,18 @@ before treating the current code as a generic producer/consumer implementation.
 
 ## Store conventions
 
+The proposal can be discussed as three primary storage capabilities:
+
+1. Spatial row-group/chunk addressing for canonical Points and Shapes, with a generic root
+   manifest that describes the grid, files, row groups, encodings and source elements.
+2. GeoArrow encoding for canonical polygon Shapes, plus a positional `cell_code` that links
+   visible boundaries to table rows.
+3. A gene-major `layers/X_csc` representation alongside `X` for small per-gene reads.
+
+Gene statistics and palettes support the client experience and also need documented
+association rules. They are listed separately below rather than hidden inside the three
+larger capabilities. None is yet a ratified SpatialData specification change.
+
 | addition | location | purpose |
 |---|---|---|
 | spatial row groups | canonical Points and Shapes Parquet | compute tile-to-file/row-group addresses |
@@ -26,11 +38,16 @@ Xenium conversion, statistics and palettes are present in the initial table writ
 CSC buffers are tuned afterward, so the table is written once. Adding tiling to an existing
 store still deletes and rewrites its table.
 
-The canonical **Points** are still written twice on the one-shot path: once by
-`sdata.write()` and again by the tiling pass that reorders them into row groups. Removing
-that would mean writing tile row groups during the initial write, which spatialdata-io
-cannot do from outside — it needs a writer hook in SpatialData core (the dropped
-[points_writer patch](spatialdata-points-writer-hook.patch)). It costs write time, not
+Canonical **Points and Shapes** are still written twice on the one-shot path: once by
+`sdata.write()` and again by the tiling pass that reorders them into row groups and adds
+the final encoding/index columns. Removing that would mean writing their final Parquet
+layouts during the initial write. SpatialData already exposes a Shapes GeoArrow option,
+but not the row-group/file controls or a Points writer override needed here. A small,
+generic writer-options or prepared-writer hook in SpatialData core would allow
+spatialdata-io to perform the sort once and publish the final Parquets directly. The
+dropped [Points-only writer-hook patch](spatialdata-points-writer-hook.patch) demonstrates
+the seam but would need to cover Shapes and stable public options before an upstream
+proposal. The current double write costs conversion time and temporary I/O, not read
 correctness.
 
 The canonical layout creates no `visualization/` directory. An ordinary
@@ -70,12 +87,24 @@ existing image layers. A newly generated profile enables metadata, expression an
 from Zarr. Image tiles are converted to uint8 RGBA for rendering; this is not an end-to-end
 16-bit rendering path.
 
+Canonical transcript x/y buffers stay separate through GPU upload and a custom
+ScatterplotLayer applies the affine transform in its vertex shader. Canonical GeoArrow
+polygon buffers avoid WKB parsing, but Celldega currently walks each newly visible tile on
+the CPU to build transformed JavaScript path arrays for the standard `PathLayer`. That
+conversion can affect pan/zoom tile-update latency and allocation pressure; it is bounded
+by visible row groups and does not repeat every animation frame. A future binary polygon
+layer could remove that materialization. Celldega does not use
+`@geoarrow/deck.gl-layers` in the current implementation.
+
 DegaFiles remain supported through `landscape_parameters.json` manifests without a
 `spatialdata` block. Celldega checks that file first, then falls back to the root
 `spatial_tiling` attribute when the file is absent.
 `celldega.pre.spatialdata_images` exports optional WebP pyramids from SpatialData and
 returns manifest fragments. This is a useful part of a future complete SpatialData-to-
 DegaFiles converter; a complete converter is not present on the reviewed branch.
+
+Celldega temporarily depends on `@cornhundred/parquet-wasm@0.7.2-celldega.0`. That package
+carries the column-projection fix until the upstream change is merged and released.
 
 ## Storage and bandwidth
 

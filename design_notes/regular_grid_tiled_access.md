@@ -125,6 +125,9 @@ zero-copy: decompression, WASM-to-Arrow IPC, buffer copies and GPU upload still 
 The canonical Celldega path instead keeps one binary sublayer per Arrow record batch and
 binds x and y as separate scalar attributes. A small ScatterplotLayer shader constructs
 the position and applies the affine on the GPU, with no coordinate zipper or concatenation.
+It multiplies the homogeneous coordinate `(x, y, 1)` and then emits world `z = 0`; retaining
+the homogeneous 1 as depth places the points on the orthographic camera plane and clips
+them.
 
 Canonical columns are ordered `x`, `y`, feature first because the patched parquet-wasm
 projection coalesces reads across the byte span from the first requested column to the
@@ -145,6 +148,13 @@ coverage but is not a guarantee for arbitrarily large polygons.
 
 Celldega accepts List or FixedSizeList vertices for v1 and separated `struct<x,y>` for
 canonical GeoArrow. The polygon starts follow ring and polygon offsets.
+
+The current reader avoids WKB decoding but is not a zero-copy polygon renderer. For each
+new set of visible row groups it walks the GeoArrow coordinate buffers, applies the affine,
+and constructs nested JavaScript path arrays for deck.gl's standard `PathLayer`. The work
+is bounded by visible tiles and is not repeated for every rendered frame, but it can add
+pan/zoom latency and garbage-collection pressure. A binary PathLayer-compatible adapter or
+custom shader path is the natural follow-up if profiling shows boundaries are limiting.
 
 Cell codes resolve the table's `region_key` and `instance_key` to shape IDs, retaining
 the corresponding table-row positions. The Xenium path also accepts a single annotated
@@ -262,6 +272,11 @@ Parquet serving requires byte-range and suffix-range requests with correct `206`
 `Content-Range` responses. Cross-origin hosting also requires CORS and exposed range
 headers. Celldega's local server implements these ranges on `adapt_dega`.
 
+Released parquet-wasm 0.7.2 does not provide the working projection behavior required by
+the canonical point path. Celldega temporarily aliases `parquet-wasm` to
+`@cornhundred/parquet-wasm@0.7.2-celldega.0`, which carries the fix until it is merged and
+released upstream.
+
 Regenerate the profile when transcript rows, geometries, feature ordering, table row
 ordering, expression, transforms, grid settings or source image change. Refresh derived
 statistics/CSC after editing `X`; refresh palettes when changing gene/category ordering.
@@ -276,4 +291,7 @@ post-save step.
 The overall operation is not transactional: separate assets are replaced in sequence.
 The one-shot Xenium entry point annotates the table before its initial write, while the
 existing-store entry point deletes and rewrites the table when expression indexing is
-requested. Preflight validation and staged publication with recovery remain future work.
+requested. The one-shot path still replaces Points and Shapes Parquets after their initial
+SpatialData write. A generic SpatialData writer hook/options interface for both element
+types could eliminate that duplicate serialization. Preflight validation and staged
+publication with recovery remain future work.

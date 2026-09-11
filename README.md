@@ -24,6 +24,12 @@ For an existing store, the opt-in tiling pass reads the store and:
   carries the `spatial_tiling` manifest;
 - adds gene statistics, palettes and a CSC expression layer to the table.
 
+The proposal has three primary storage capabilities: spatially addressed Parquet row
+groups plus root discovery metadata, GeoArrow polygon encoding for canonical Shapes, and
+a gene-major `X_csc` layer alongside the analysis-oriented `X`. Gene statistics and the
+`uns` palettes are supporting profile metadata. These are experimental conventions, not
+three ratified changes to the SpatialData specification.
+
 ```
 sample.zarr/
 ├── points/transcripts/points.parquet/      canonical columns, reordered into tile row groups
@@ -41,6 +47,13 @@ store's own `obs`, `var`, `obsm`, `uns` and OME-Zarr. Centroids use the selected
 transform; general registration and physical scale inference still need work. Native
 OME-Zarr images are the new profile's default and are converted to 8-bit for rendering.
 An optional WebP pyramid can be built by `celldega.pre.spatialdata_images`.
+
+Celldega reads canonical transcript `x`, `y`, and `feature_name` columns directly. A custom
+ScatterplotLayer binds the separate x/y Arrow buffers and applies the micron-to-pixel
+affine transform on the GPU, resetting the rendered world z coordinate to zero. Canonical
+GeoArrow polygons are decoded without WKB parsing, transformed into visible JavaScript
+path arrays on the CPU, and rendered with deck.gl's standard `PathLayer`. The branch does
+not use `@geoarrow/deck.gl-layers`.
 
 The tiled store is readable by ordinary SpatialData. An ordinary SpatialData save to a
 new store retains analysis content but does not promise to preserve the physical row-group
@@ -96,8 +109,14 @@ via zarrita), using the canonical transcript and boundary Parquets directly. See
 measurements behind it are reproducible via [`integration/probes/`](integration/probes/).
 
 **SpatialData core is unmodified.** Experimental stores read without a core patch;
-preserving the tile contract on save remains unresolved. A `points_writer` hook was
-prototyped and dropped because nothing used it; the patch is kept in `design_notes/` if it is ever wanted.
+preserving the tile contract on save remains unresolved. The one-shot Xenium path still
+writes canonical Points and Shapes once through `SpatialData.write()` and then replaces
+their Parquets with tiled versions. A small Points/Shapes writer-options or writer-hook API
+in SpatialData would let spatialdata-io supply the final tiled representation during the
+initial write. A Points-only prototype is kept in `design_notes/` as a starting point.
+
+Celldega temporarily uses `@cornhundred/parquet-wasm@0.7.2-celldega.0`, which carries the
+column-projection fix pending upstream merge and release.
 
 ---
 

@@ -1,7 +1,7 @@
 # `adapt_dega_v2` implementation review
 
-Updated 2026-09-10 for spatialdata-io and Celldega `adapt_dega_v2`, with unmodified
-SpatialData core. The reviewed changes are commits `feaedf0` and `e84a6c8`.
+Updated 2026-09-11 for spatialdata-io and Celldega `adapt_dega_v2`, with unmodified
+SpatialData core. The reviewed branch heads are `ee2f6eb` and `ae0a5cf`.
 
 ## Current conclusion
 
@@ -33,6 +33,12 @@ categories, including unused categories.
    rendering. The custom transcript shader is therefore the narrower zero-copy path; no
    GeoArrow deck.gl dependency is added to Celldega.
 
+   The transcript affine uses a homogeneous input coordinate of 1, then explicitly emits
+   world `z = 0`; leaving z at 1 placed points on the orthographic camera plane and clipped
+   them. The current Celldega dependency is the temporary
+   `@cornhundred/parquet-wasm@0.7.2-celldega.0`, carrying the projection fix pending an
+   upstream release.
+
 1. **Cell identity.** Boundary `cell_code` values now use absolute table row positions
    resolved through the SpatialData table's `region_key` and `instance_key`. The Xenium
    case is supported when its single table region is `cell_labels` and the requested
@@ -48,8 +54,9 @@ categories, including unused categories.
    the CSC layer to the in-memory table before its initial `SpatialData.write()`. It then
    replaces the CSC buffers with the small chunks needed for browser gene reads. It does
    not delete and recreate the fresh table. Points and Shapes are still initially written
-   by SpatialData and then replaced with tiled Parquets; avoiding that would require a
-   deeper writer hook.
+   by SpatialData and then replaced with tiled Parquets. Avoiding that requires a small
+   generic SpatialData writer-options or prepared-writer hook for both element types; the
+   retained prototype covers Points only.
 
 4. **Cluster palette order.** The JavaScript reader retains the encoded categorical order
    rather than sorting observed values, so `uns` colors stay associated with their labels.
@@ -60,8 +67,9 @@ categories, including unused categories.
 
 ## Deferred limitations
 
-- Ordinary `SpatialData.write()` does not preserve the visualization directory, Parquet
-  row-group layout or tuned CSC chunks. The profile must be regenerated after such a save.
+- Ordinary `SpatialData.write()` does not preserve the root tiling manifest, Parquet
+  row-group layout or tuned CSC chunks. In the older v1 layout it also does not preserve
+  the visualization directory. The profile must be regenerated after such a save.
 - `uns["gene_colors"]` does not automatically follow gene subset/reorder operations. The
   writer currently preserves an existing palette without validating that association.
 - Grid derivation and browser placement are not generic for arbitrary affine transforms or
@@ -74,8 +82,8 @@ categories, including unused categories.
 - Existing-store expression indexing is not transactional because it deletes and rewrites
   the table. The optimized one-shot Xenium path avoids this particular risk.
 - Browser rendering is still an integration check rather than an automated CI test. The
-  2026-09-10 check rendered both the rebuilt pancreas canonical store and its DegaFiles
-  control at close zoom with no new browser errors.
+  2026-09-11 check rendered transcripts and cell boundaries from the rebuilt pancreas
+  canonical store after the z fix, and the DegaFiles control remained functional.
 
 ## Verification
 

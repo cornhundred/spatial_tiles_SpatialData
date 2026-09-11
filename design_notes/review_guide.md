@@ -1,11 +1,11 @@
 # Review guide
 
-Reviewed local branch heads and uncommitted changes on 2026-09-10:
+Reviewed branch heads on 2026-09-11:
 
 | repository | branch | commit | role |
 |---|---|---|---|
-| spatialdata-io | `adapt_dega_v2` | `feaedf0` | profile producer |
-| celldega | `adapt_dega_v2` | `e84a6c8` | native reader and optional WebP export |
+| spatialdata-io | `adapt_dega_v2` | `ee2f6eb` | profile producer |
+| celldega | `adapt_dega_v2` | `ae0a5cf` | native reader and optional WebP export |
 | spatialdata | `adapt_dega_v2` | `ccf1ea0` | unmodified core |
 
 Start with [proposal_summary.md](proposal_summary.md), then
@@ -34,7 +34,9 @@ adapted. DegaFiles still use the existing manifest and Parquet paths.
 ## Decisions to retain
 
 - Keep scientific x/y and geometry authoritative. Canonical x/y remain separate through
-  GPU upload and are combined in the vertex shader. Canonical polygons use GeoArrow.
+  GPU upload and are combined in the vertex shader, which emits world `z = 0`. Canonical
+  polygons use GeoArrow and are materialized as visible path arrays for the standard
+  deck.gl `PathLayer`.
 - Retain a CSR primary matrix where appropriate and add a CSC layer for column reads.
   CSC is another storage orientation of the same matrix, not a mathematical transpose.
 - Keep gene colors in `uns["gene_colors"]`. Document the explicit `var_names` association
@@ -78,7 +80,7 @@ comparisons should not be used to promise general overhead or latency.
 | Celldega complete JS suite | 180 passed in 21 suites |
 | Celldega Python suite, integration interpreter | 406 passed, 1 skipped |
 | raw-Xenium canonical build | pancreas built in 48 s; 8,073,840 points, 140,702 Shapes and `X_csc` reopen through SpatialData |
-| browser integration | canonical SpatialData and DegaFiles control both rendered at close zoom without browser errors |
+| browser integration | canonical SpatialData transcripts/boundaries and the DegaFiles control rendered at close zoom after the transcript z fix |
 
 Commands and reproduction details are in [the review](implementation_review.md) and
 [integration/probes/README.md](../integration/probes/README.md). The environment-gated
@@ -86,7 +88,7 @@ raw-Xenium *test* still describes the superseded full profile and was not run; t
 path was instead exercised directly against the real pancreas dataset, which is what the
 row above records.
 
-The 2026-09-10 review rebuilt pancreas in 48 seconds and rendered both the canonical store
-and DegaFiles control in Celldega's browser path. CI still lacks an automated
+The review rebuilt pancreas in 48 seconds. On 2026-09-11 it rendered both the canonical
+store and DegaFiles control in Celldega's browser path. CI still lacks an automated
 producer-to-browser rendering test. Test counts are a dated snapshot, not part of the
 protocol.
